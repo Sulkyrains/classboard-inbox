@@ -1,0 +1,36 @@
+{
+  "name": "classboard-inbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/build-worker.mjs",
+    "preview": "wrangler pages dev dist --ip 127.0.0.1 --port 8788",
+    "db:migrate": "wrangler d1 migrations apply classboard-inbox --local",
+    "db:seed": "node scripts/seed.mjs",
+    "test": "vitest run",
+    "test:integration": "node scripts/integration.mjs",
+    "admin:setup": "node scripts/admin-setup.mjs",
+    "deploy": "npm run build && wrangler pages deploy dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "~5.9.2",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  }
+}

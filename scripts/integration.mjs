@@ -1,0 +1,34 @@
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { readFile } from 'node:fs/promises';
+import { randomBytes,randomUUID,pbkdf2Sync } from 'node:crypto';
+import assert from 'node:assert/strict';
+const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await readFile('dist/_worker.js','utf8'),compatibilityDate:'2026-09-09',d1Databases:['DB']}));
+try{
+  const db=await mf.getD1Database('DB');
+  for(const statement of (await readFile('migrations/0001_initial.sql','utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
+  const secret=randomBytes(24).toString('hex'),salt=randomBytes(16).toString('hex');
+  await db.prepare('INSERT INTO admins VALUES(?,?,?,?,?,?)').bind(randomUUID(),'integration-admin','测试班委',salt,pbkdf2Sync(secret,salt,100000,32,'sha256').toString('hex'),new Date().toISOString()).run();
+  let cookie='';
+  const call=(path,method='GET',body,auth=true,origin='https://example.test')=>mf.dispatchFetch('https://example.test/api'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(auth&&cookie?{Cookie:cookie}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  assert.equal((await call('/admin/notices')).status,401);
+  assert.equal((await call('/login','POST',{username:'integration-admin',password:secret},false,'https://evil.test')).status,403);
+  const login=await call('/login','POST',{username:'integration-admin',password:secret});assert.equal(login.status,200);
+  const setCookie=login.headers.get('Set-Cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/Secure/);assert.match(setCookie,/SameSite=Strict/);cookie=setCookie.split(';')[0];
+  const notice={title:'集成测试通知',body:'请在明天完成作业',category:'作业',location:'教三201',audience:'全体',event_at:null,deadline_at:'2026-09-12T12:00:00Z',pinned:false};
+  const create=await call('/admin/notices','POST',notice);assert.equal(create.status,201);const {id}=await create.json();
+  let list=await(await call('/notices')).json();assert.equal(list.notices.length,1);assert.equal(list.notices[0].source_text,undefined);
+  assert.equal((await call('/admin/notices/'+id,'PUT',{...notice,pinned:true,version:1})).status,200);
+  assert.equal((await call('/admin/notices/'+id,'PUT',{...notice,version:1})).status,409);
+  list=await(await call('/notices?category=活动')).json();assert.equal(list.notices.length,0);
+  await db.prepare("UPDATE notices SET status='pending',source_text='PRIVATE SOURCE' WHERE id=?").bind(id).run();
+  assert.equal((await(await call('/notices', 'GET',undefined,false)).json()).notices.length,0);
+  assert.equal((await call('/notices/'+id,'GET',undefined,false)).status,404);
+  assert.equal((await call('/admin/notices/'+id+'/publish','POST',{version:2},false)).status,401);
+  assert.equal((await call('/admin/notices/'+id+'/publish','POST',{version:2})).status,200);
+  assert.equal((await call('/admin/notices/'+id+'/publish','POST',{version:2})).status,409);
+  list=await(await call('/notices')).json();assert.equal(list.notices.length,1);assert.equal(list.notices[0].source_text,undefined);assert.equal(list.notices[0].pinned,true);
+  assert.equal((await call('/admin/notices/'+id+'/archive','POST',{version:3})).status,200);
+  assert.equal((await(await call('/notices')).json()).notices.length,0);
+  assert.equal((await call('/logout','POST',{})).status,200);assert.equal((await call('/admin/notices')).status,401);
+  console.log('PASS: 登录、CSRF、游客权限、发布、分类筛选、置顶、并发编辑、待审隔离、审核发布、归档、退出。');
+}finally{await mf.dispose();}
