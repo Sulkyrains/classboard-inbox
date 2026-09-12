@@ -1,7 +1,9 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
 import { derive, equal, sha256 } from './auth';
+import { parseMessages } from '../src/parser';
+import { llmAdapter,type LlmEnv } from './llm';
 
-export interface Env { DB: D1Database; ASSETS: Fetcher }
+export interface Env extends CloudflareBindings,LlmEnv { ASSETS: Fetcher }
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 function fail(status: number, message: string): never { throw new HttpError(status,message); }
 const json = (body: unknown, status=200, headers: Record<string,string>={}) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
@@ -53,7 +55,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
   if(!env.DB)return json({error:'数据库尚未配置'},503);
   if(!['GET','HEAD'].includes(method))requireOrigin(request);
-  if(path==='/api/health')return json({ok:true,stage:'M1'});
+  if(path==='/api/health')return json({ok:true,stage:'MVP'});
   if(path==='/api/session'&&method==='GET')return json({admin:await session(request,env.DB)});
   if(path==='/api/login'&&method==='POST'){
     const body=await readBody(request);
@@ -96,6 +98,28 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if(!path.startsWith('/api/admin/'))return json({error:'接口不存在'},404);
   const admin=await session(request,env.DB); if(!admin)fail(401,'请先以班委身份登录');
+  if(path==='/api/admin/parse-options'&&method==='GET')return json({llmAvailable:!!llmAdapter(env)});
+  if(path==='/api/admin/parse'&&method==='POST'){
+    const body=await readBody(request);const text=field(body.text,'群聊文本',20000,true);
+    const reference=dateField(body.referenceDate);if(!reference)fail(400,'请选择消息基准时间');
+    return json(await parseMessages(text,{referenceDate:reference},body.enhance===true?llmAdapter(env):undefined));
+  }
+  if(path==='/api/admin/import'&&method==='POST'){
+    const body=await readBody(request);
+    if(!Array.isArray(body.drafts)||!body.drafts.length||body.drafts.length>30)fail(400,'每批请选择 1—30 条通知');
+    if(!['text','ocr','llm'].includes(String(body.source)))fail(400,'导入来源不正确');
+    const now=new Date().toISOString(),statements:D1PreparedStatement[]=[];
+    for(const raw of body.drafts){
+      if(!raw||typeof raw!=='object')fail(400,'草稿格式不正确');
+      const n=validate(raw),id=crypto.randomUUID(),sourceText=field(raw.source_text,'原文',20000,true);
+      const warnings=Array.isArray(raw.warnings)?raw.warnings.slice(0,20).map((x:unknown)=>field(x,'提示',300)):[];
+      const hash=await sha256(n.body.replace(/\s+/g,'').normalize('NFKC'));
+      statements.push(env.DB.prepare("INSERT OR IGNORE INTO notices(id,title,body,category,location,audience,event_at,deadline_at,pinned,status,source,source_text,source_hash,warnings,author_id,author_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,?,?,?)").bind(id,n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,body.source,sourceText,hash,JSON.stringify(warnings),admin.id,admin.display_name,now,now));
+      statements.push(env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=?').bind(crypto.randomUUID(),admin.display_name,'导入待审核',now,id));
+    }
+    const results=await env.DB.batch(statements);const imported=results.filter((_,i)=>i%2===0).reduce((sum,r)=>sum+(r.meta.changes||0),0);
+    return json({imported,skipped:body.drafts.length-imported},201);
+  }
   if(path==='/api/admin/notices'&&method==='GET'){
     const result=await env.DB.prepare('SELECT * FROM notices ORDER BY created_at DESC LIMIT 500').all();
     return json({notices:result.results.map(r=>mapNotice(r,true))});

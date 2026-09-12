@@ -6,4 +6,5 @@ dist/
 !.env.example
 work/
 coverage/
+public/ocr/
 *.log

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "tsc --noEmit && vite build && node scripts/build-worker.mjs",
+    "build": "tsc --noEmit && node scripts/prepare-ocr.mjs && vite build && node scripts/build-worker.mjs",
     "preview": "wrangler pages dev dist --ip 127.0.0.1 --port 8788",
     "db:migrate": "wrangler d1 migrations apply classboard-inbox --local",
     "db:seed": "node scripts/seed.mjs",
@@ -28,6 +28,7 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
     "esbuild": "^0.25.0",
+    "miniflare": "^5.20260908.0-alpha",
     "typescript": "~5.9.2",
     "vite": "^7.0.0",
     "vitest": "^3.2.0",

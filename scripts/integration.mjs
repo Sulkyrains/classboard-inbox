@@ -1,11 +1,11 @@
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { readFile } from 'node:fs/promises';
+import { readFile,readdir } from 'node:fs/promises';
 import { randomBytes,randomUUID,pbkdf2Sync } from 'node:crypto';
 import assert from 'node:assert/strict';
 const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await readFile('dist/_worker.js','utf8'),compatibilityDate:'2026-09-09',d1Databases:['DB']}));
 try{
   const db=await mf.getD1Database('DB');
-  for(const statement of (await readFile('migrations/0001_initial.sql','utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
+  for(const file of (await readdir('migrations')).sort())for(const statement of (await readFile('migrations/'+file,'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
   const secret=randomBytes(24).toString('hex'),salt=randomBytes(16).toString('hex');
   await db.prepare('INSERT INTO admins VALUES(?,?,?,?,?,?)').bind(randomUUID(),'integration-admin','测试班委',salt,pbkdf2Sync(secret,salt,100000,32,'sha256').toString('hex'),new Date().toISOString()).run();
   let cookie='';
@@ -29,6 +29,15 @@ try{
   list=await(await call('/notices')).json();assert.equal(list.notices.length,1);assert.equal(list.notices[0].source_text,undefined);assert.equal(list.notices[0].pinned,true);
   assert.equal((await call('/admin/notices/'+id+'/archive','POST',{version:3})).status,200);
   assert.equal((await(await call('/notices')).json()).notices.length,0);
+  const parse=await call('/admin/parse','POST',{text:'@全体成员 高数作业明晚8点前提交。',referenceDate:'2026-09-09T10:00:00+08:00'});assert.equal(parse.status,200);
+  const parsed=await parse.json();assert.equal(parsed.drafts.length,1);assert.equal(parsed.drafts[0].deadline_at,'2026-09-10T12:00:00.000Z');
+  const imported=await call('/admin/import','POST',{drafts:parsed.drafts,source:'text',status:'published'});assert.equal(imported.status,201);assert.equal((await imported.json()).imported,1);
+  assert.equal((await(await call('/notices','GET',undefined,false)).json()).notices.length,0);
+  const dup=await call('/admin/import','POST',{drafts:parsed.drafts,source:'text'});assert.equal((await dup.json()).skipped,1);
+  const all=await(await call('/admin/notices')).json();const pending=all.notices.find(n=>n.status==='pending');assert.ok(pending);assert.ok(pending.source_text);
+  assert.equal((await call('/admin/notices/'+pending.id+'/publish','POST',{version:pending.version})).status,200);
+  assert.equal((await(await call('/notices','GET',undefined,false)).json()).notices.length,1);
   assert.equal((await call('/logout','POST',{})).status,200);assert.equal((await call('/admin/notices')).status,401);
+  assert.equal((await call('/admin/parse','POST',{text:'作业明天交',referenceDate:'2026-09-09T10:00:00+08:00'})).status,401);
   console.log('PASS: 登录、CSRF、游客权限、发布、分类筛选、置顶、并发编辑、待审隔离、审核发布、归档、退出。');
 }finally{await mf.dispose();}

@@ -1,0 +1,45 @@
+import { useEffect,useRef,useState } from 'react';
+import { ClipboardPaste,ImagePlus,ArrowRight,Sparkles,Check,FileText,UploadCloud,RefreshCw,AlertCircle,Pencil,CheckCircle2 } from 'lucide-react';
+import { api } from '../api';
+import type { Draft,NoticeInput } from '../shared/types';
+import type { ParseResult } from '../parser';
+import { normalizeOcrText } from '../parser/ocr';
+import { fromInputDate,toInputDate,formatDate } from '../shared/dates';
+import { Modal } from './Modal';
+import { NoticeForm } from './NoticeForm';
+const example='@全体成员 高数第3章习题，明晚8点前提交到学习通。\n\n周五下午3点在教三201开班会，周四18点前完成报名。\n\n@软件1班 明天上午8点的英语课改到教二305。';
+export function ImportPanel({onImported,onReview}:{onImported:()=>Promise<void>;onReview:()=>void}){
+  const [mode,setMode]=useState<'text'|'ocr'>('text'),[text,setText]=useState(''),[reference,setReference]=useState(toInputDate(new Date().toISOString())),[result,setResult]=useState<ParseResult|null>(null),[selected,setSelected]=useState<number[]>([]),[busy,setBusy]=useState(false),[ocrBusy,setOcrBusy]=useState(false),[progress,setProgress]=useState(0),[error,setError]=useState(''),[enhance,setEnhance]=useState(false),[llm,setLlm]=useState(false),[editing,setEditing]=useState<number|null>(null),[image,setImage]=useState(''),[success,setSuccess]=useState<{imported:number;skipped:number}|null>(null),[fileName,setFileName]=useState('');
+  const workerRef=useRef<{terminate:()=>Promise<unknown>}|null>(null),mounted=useRef(true),fileRef=useRef<HTMLInputElement>(null);
+  useEffect(()=>{mounted.current=true;api<{llmAvailable:boolean}>('/admin/parse-options').then(r=>{if(mounted.current)setLlm(r.llmAvailable);}).catch(()=>{});return()=>{mounted.current=false;void workerRef.current?.terminate();};},[]);
+  useEffect(()=>()=>{if(image)URL.revokeObjectURL(image);},[image]);
+  const reset=()=>{setResult(null);setSelected([]);setSuccess(null);setError('');};
+  const parse=async()=>{reset();setBusy(true);try{const r=await api<ParseResult>('/admin/parse',{method:'POST',body:JSON.stringify({text,referenceDate:fromInputDate(reference),enhance})});setResult(r);setSelected(r.drafts.map((_,i)=>i));}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  const recognize=async(file:File)=>{
+    reset();setText('');if(!['image/png','image/jpeg','image/webp'].includes(file.type)){setError('请选择 PNG、JPG 或 WebP 截图');return;}if(file.size>10*1024*1024){setError('单张截图不能超过 10 MB，请裁剪后重试');return;}
+    setImage(URL.createObjectURL(file));setFileName(file.name);setOcrBusy(true);setProgress(0);
+    try{
+      const bitmap=await createImageBitmap(file);if(bitmap.width*bitmap.height>16000000){bitmap.close();throw new Error('截图尺寸过大，请裁剪为较短的消息片段');}bitmap.close();
+      const {createWorker}=await import('tesseract.js');
+      const worker=await createWorker('chi_sim+eng',1,{workerPath:'/ocr/worker.min.js',corePath:'/ocr',langPath:'https://tessdata.projectnaptha.com/4.0.0',logger:m=>{if(mounted.current&&m.status==='recognizing text')setProgress(Math.round(m.progress*100));}});
+      if(!mounted.current){await worker.terminate();return;}workerRef.current=worker;
+      const r=await worker.recognize(file);if(mounted.current){setText(normalizeOcrText(r.data.text));if(!r.data.text.trim())setError('未识别到文字，请换一张更清晰的截图，或直接粘贴群聊。');}
+      await worker.terminate();workerRef.current=null;
+    }catch{if(mounted.current)setError('截图识别未完成。请检查网络、裁剪截图后重试，或切换为粘贴文本。');}
+    finally{if(mounted.current)setOcrBusy(false);if(fileRef.current)fileRef.current.value='';}
+  };
+  const submit=async()=>{if(!result)return;setBusy(true);setError('');try{const r=await api<{imported:number;skipped:number}>('/admin/import',{method:'POST',body:JSON.stringify({drafts:selected.map(i=>result.drafts[i]),source:mode==='ocr'?'ocr':result.engine==='llm'?'llm':'text'})});setSuccess(r);setResult(null);await onImported();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  const update=(n:NoticeInput)=>{if(result&&editing!==null){setResult({...result,drafts:result.drafts.map((d,i)=>i===editing?{...d,...n}:d)});setEditing(null);}return Promise.resolve();};
+  return <div className="import-workspace"><div className="import-steps"><span className={!result&&!success?'current':''}><b>1</b>导入群消息</span><i/><span className={result?'current':''}><b>2</b>检查结构化草稿</span><i/><span className={success?'current':''}><b>3</b>送交班委审核</span></div>
+    <div className="import-columns"><section className="import-input"><div className="section-heading"><h2>把群消息带过来</h2><span className="private-label">仅班委可见</span></div><div className="input-modes"><button disabled={ocrBusy||busy} className={mode==='text'?'active':''} onClick={()=>{setMode('text');reset();}}><ClipboardPaste size={17}/>粘贴文本</button><button disabled={ocrBusy||busy} className={mode==='ocr'?'active':''} onClick={()=>{setMode('ocr');reset();}}><ImagePlus size={17}/>群聊截图</button></div>
+    {mode==='ocr'&&<><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>{if(e.target.files?.[0])void recognize(e.target.files[0]);}}/><button className="upload-zone" disabled={ocrBusy||busy} onClick={()=>fileRef.current?.click()}>{ocrBusy?<RefreshCw size={29} className="spin"/>:<UploadCloud size={31}/>}<strong>{ocrBusy?`正在识别文字 ${progress}%`:'选择群聊截图'}</strong><span>PNG / JPG / WebP · 最大 10 MB</span><small>截图在当前设备识别，不上传图片</small></button>{image&&<div className="screenshot-preview"><img src={image} alt="待识别的群聊截图"/><span>{fileName}</span></div>}</>}
+    <label className="import-text-label">{mode==='ocr'?'识别结果 · 可直接修正':'群聊文本'}<textarea disabled={busy||ocrBusy} rows={mode==='ocr'?9:13} maxLength={20000} value={text} onChange={e=>{setText(e.target.value);reset();}} placeholder={'粘贴 QQ / 微信群聊内容…\n\n例如：@全体成员 明天下午3点在教三201开班会，请准时到场。'}/></label><div className="text-toolbar"><span>{text.length.toLocaleString()} / 20,000 字</span>{mode==='text'&&<button disabled={busy} onClick={()=>{setText(example);reset();}}>试试示例消息<ArrowUpRightIcon/></button>}</div><label className="reference-label">消息基准时间<input type="datetime-local" required disabled={busy} value={reference} onChange={e=>{setReference(e.target.value);reset();}}/><span>用于理解“明天、下周五”。原文含发送日期时优先使用原日期。</span></label>{llm&&<label className="enhance-toggle"><input type="checkbox" disabled={busy} checked={enhance} onChange={e=>{setEnhance(e.target.checked);reset();}}/><span><Sparkles size={15}/>增强解析<small>将文本发送至维护者配置的模型服务；失败自动回退规则。</small></span></label>}
+    {error&&<p className="error" role="alert">{error}</p>}<button className="button primary full" disabled={busy||ocrBusy||!text.trim()||!reference} onClick={()=>void parse()}>{busy?<RefreshCw size={17} className="spin"/>:<Sparkles size={17}/>}生成通知草稿<ArrowRight size={17}/></button></section>
+    <section className="draft-output"><div className="section-heading"><h2>通知草稿{result&&<span className="number-badge">{result.drafts.length}</span>}</h2>{result&&<span className="private-label">{result.engine==='rules'?'规则解析':'增强解析'}</span>}</div>
+    {!result&&!success&&<div className="draft-placeholder"><span><FileText size={37}/></span><h3>群里的安排，变成清晰的通知</h3><p>粘贴文本或选择截图，自动提取<br/>标题、时间、地点、分类与通知对象。</p><div><Check size={14}/>先生成草稿，审核后才会公开</div></div>}
+    {result&&<>{result.warnings.map(w=><div className="warning" key={w}><AlertCircle size={15}/>{w}</div>)}{result.ignored>0&&<p className="field-hint">已跳过 {result.ignored} 段未识别为通知的内容。</p>}<div className="draft-list">{result.drafts.map((d,i)=><article className={`draft-card ${selected.includes(i)?'checked':''}`} key={i}><div className="draft-card-head"><label><input type="checkbox" disabled={busy} checked={selected.includes(i)} onChange={()=>setSelected(selected.includes(i)?selected.filter(n=>n!==i):[...selected,i])}/><span>草稿 {String(i+1).padStart(2,'0')}</span></label><span className="category-badge homework">{d.category}</span><button disabled={busy} onClick={()=>setEditing(i)}><Pencil size={14}/>修改</button></div><h3>{d.title}</h3><p>{d.body}</p><dl><dt>活动时间</dt><dd>{d.event_at?formatDate(d.event_at,true):'未识别'}</dd><dt>截止时间</dt><dd>{d.deadline_at?formatDate(d.deadline_at,true):'未识别'}</dd><dt>地点</dt><dd>{d.location||'未识别'}</dd><dt>通知对象</dt><dd>{d.audience||'未指定'}</dd></dl>{d.warnings.length>0&&<div className="warning">{d.warnings.map(w=><p key={w}>{w}</p>)}</div>}</article>)}</div>{result.drafts.length>0&&<div className="draft-submit"><p>选中 {selected.length} 条 · 可在审核时再次修改</p><button className="button primary" disabled={busy||!selected.length} onClick={()=>void submit()}>加入待审核<ArrowRight size={16}/></button></div>}</>}
+    {success&&<div className="import-success"><CheckCircle2 size={43}/><h3>{success.imported} 条通知已加入待审核</h3><p>{success.skipped>0?`已跳过 ${success.skipped} 条重复内容。`:'游客暂时看不到这些内容。'}<br/>检查无误后，由班委审核发布。</p><button className="button primary" onClick={onReview}>前往审核<ArrowRight size={17}/></button></div>}
+    </section></div>{editing!==null&&result&&<Modal title="修改导入草稿" onClose={()=>setEditing(null)}><NoticeForm initial={result.drafts[editing]} onSave={update} onCancel={()=>setEditing(null)} label="保存草稿修改"/></Modal>}
+  </div>;
+}
+function ArrowUpRightIcon(){return <ArrowRight size={13}/>;}

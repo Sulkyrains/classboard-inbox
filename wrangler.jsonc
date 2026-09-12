@@ -6,7 +6,7 @@
   "d1_databases": [{
     "binding": "DB",
     "database_name": "classboard-inbox",
-    "database_id": "00000000-0000-0000-0000-000000000001",
+    "database_id": "a9ba17c9-59c8-4238-878e-f95ebc0e8a20",
     "migrations_dir": "migrations"
   }]
 }
