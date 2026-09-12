@@ -1,5 +1,9 @@
 # 知会 · 班级通知看板
 
+线上网站：[https://classboard-inbox.pages.dev](https://classboard-inbox.pages.dev/)。已于 2026-09-12 部署到 Cloudflare Pages，连接远程 D1，完成班委账号初始化，提供 6 条示例通知。
+
+交付验证：21 条单元测试、构建、接口集成测试及实际 OCR 样例识别通过；线上页面、分类筛选、公开字段过滤、游客写入限制和跨站请求拒绝检查通过。可运行 `node scripts/verify-live.mjs` 复查线上只读验收。可选 LLM 未配置真实服务；默认使用规则解析。登录后从“群消息导入”进入草稿与审核流程。
+
 React + TypeScript + Cloudflare Pages Functions + D1 的班级通知网站。群消息先解析为草稿，班委审核后才公开。
 
 ## 实现范围
