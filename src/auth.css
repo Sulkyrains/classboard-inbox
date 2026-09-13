@@ -1,0 +1,5 @@
+.auth-screen{min-height:100dvh;display:flex;align-items:center;justify-content:center;gap:18px;background:radial-gradient(ellipse at 15% 20%,#dce9ff,transparent 55%),linear-gradient(135deg,#f5f9ff,#eef4ff);color:#536e91}
+.auth-screen .modal{border-top:4px solid #638fdf}
+.auth-screen .modal-head>.icon-button{display:none}
+.auth-screen .notice-form input{font-size:16px}
+.auth-screen .modal::backdrop{background:transparent}

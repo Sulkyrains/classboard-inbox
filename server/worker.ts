@@ -25,7 +25,8 @@ function requireOrigin(request: Request) {
 async function session(request: Request, db: D1Database): Promise<Admin|null> {
   const id=request.headers.get('Cookie')?.match(/(?:^|;\s*)cb_session=([a-f0-9]{64})(?:;|$)/)?.[1];
   if(!id)return null;
-  return db.prepare('SELECT a.id,a.username,a.display_name FROM sessions s JOIN admins a ON a.id=s.admin_id WHERE s.id_hash=? AND s.expires_at>?').bind(await sha256(id),Date.now()).first<Admin>();
+  const user=await db.prepare('SELECT a.id,a.student_id,a.display_name,a.role,a.must_change_password FROM user_sessions s JOIN users a ON a.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(await sha256(id),Date.now()).first<Admin>();
+  return user?{...user,must_change_password:!!user.must_change_password}:null;
 }
 function cookie(request: Request, value: string, age: number) {
   return `cb_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${new URL(request.url).protocol==='https:'?'; Secure':''}`;
@@ -56,32 +57,67 @@ async function route(request: Request, env: Env): Promise<Response> {
   if(!env.DB)return json({error:'数据库尚未配置'},503);
   if(!['GET','HEAD'].includes(method))requireOrigin(request);
   if(path==='/api/health')return json({ok:true,stage:'MVP'});
-  if(path==='/api/session'&&method==='GET')return json({admin:await session(request,env.DB)});
+  if(path==='/api/session'&&method==='GET')return json({user:await session(request,env.DB)});
   if(path==='/api/login'&&method==='POST'){
     const body=await readBody(request);
-    const username=field(body.username,'账号',64,true).toLowerCase();
-    const secret=field(body.password,'密码',256,true);
+    const username=field(body.student_id,'学号',64,true);
+    const name=field(body.name,'姓名',64,true);
+    const secret=body.password;
+    if(typeof secret!=='string'||!secret||secret.length>256)fail(400,'请输入有效密码');
     const now=Date.now();
     const bucket=await sha256(`${request.headers.get('CF-Connecting-IP')||'local'}:${username}`);
     const ipBucket=await sha256(`ip:${request.headers.get('CF-Connecting-IP')||'local'}`);
     const countSql='INSERT INTO login_attempts(bucket,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN expires_at<? THEN 1 ELSE attempts+1 END,expires_at=CASE WHEN expires_at<? THEN excluded.expires_at ELSE expires_at END RETURNING attempts';
     const counters=await env.DB.batch<{attempts:number}>([env.DB.prepare(countSql).bind(bucket,now+900000,now,now),env.DB.prepare(countSql).bind(ipBucket,now+900000,now,now)]);
-    if(Number(counters[0].results[0]?.attempts)>8||Number(counters[1].results[0]?.attempts)>40)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
-    const row=await env.DB.prepare('SELECT * FROM admins WHERE username=?').bind(username).first<{id:string;username:string;display_name:string;salt:string;digest:string}>();
+    if(Number(counters[0].results[0]?.attempts)>8||Number(counters[1].results[0]?.attempts)>200)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
+    const row=await env.DB.prepare('SELECT * FROM users WHERE student_id=?').bind(username).first<Admin & {salt:string;digest:string}>();
     const digest=await derive(secret,row?.salt||'unregistered-account');
-    if(!row||!equal(digest,row.digest))fail(401,'账号或密码不正确');
+    if(!row||!equal(digest,row.digest)||row.display_name!==name)fail(401,'姓名、学号或密码不正确');
     const id=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
-    await env.DB.batch([
-      env.DB.prepare('INSERT INTO sessions(id_hash,admin_id,expires_at) VALUES(?,?,?)').bind(await sha256(id),row.id,now+28800000),
-      env.DB.prepare('DELETE FROM sessions WHERE expires_at<?').bind(now),
+    const authenticated=await env.DB.batch([
+      env.DB.prepare('INSERT INTO user_sessions(id_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND digest=?').bind(await sha256(id),now+28800000,row.id,row.digest),
+      env.DB.prepare('DELETE FROM user_sessions WHERE expires_at<?').bind(now),
       env.DB.prepare('DELETE FROM login_attempts WHERE bucket=? OR expires_at<?').bind(bucket,now)
     ]);
-    return json({admin:{id:row.id,username:row.username,display_name:row.display_name}},200,{'Set-Cookie':cookie(request,id,28800)});
+    if(!authenticated[0].meta.changes)fail(401,'账号状态已变更，请重新登录');
+    return json({user:{id:row.id,student_id:row.student_id,display_name:row.display_name,role:row.role,must_change_password:!!row.must_change_password}},200,{'Set-Cookie':cookie(request,id,28800)});
   }
   if(path==='/api/logout'&&method==='POST'){
     const id=request.headers.get('Cookie')?.match(/(?:^|;\s*)cb_session=([a-f0-9]{64})(?:;|$)/)?.[1];
-    if(id)await env.DB.prepare('DELETE FROM sessions WHERE id_hash=?').bind(await sha256(id)).run();
+    if(id)await env.DB.prepare('DELETE FROM user_sessions WHERE id_hash=?').bind(await sha256(id)).run();
     return json({ok:true},200,{'Set-Cookie':cookie(request,'',0)});
+  }
+  const user=await session(request,env.DB); if(!user)fail(401,'请先登录');
+  if(path==='/api/account/password'&&method==='POST'){
+    const now=Date.now(),bucket=await sha256('change:'+user.id);
+    const attempt=await env.DB.prepare('INSERT INTO login_attempts(bucket,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN expires_at<? THEN 1 ELSE attempts+1 END,expires_at=CASE WHEN expires_at<? THEN excluded.expires_at ELSE expires_at END RETURNING attempts').bind(bucket,now+900000,now,now).first<{attempts:number}>();
+    if(attempt&&attempt.attempts>8)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
+    const body=await readBody(request);
+    const current=body.current_password, next=body.new_password;
+    if(typeof current!=='string'||current.length>256||typeof next!=='string'||next.length<12||next.length>256||!next.trim()||next===current)fail(400,'新密码须为 12—256 位，且不能与原密码相同');
+    const row=await env.DB.prepare('SELECT salt,digest FROM users WHERE id=?').bind(user.id).first<{salt:string;digest:string}>();
+    if(!row||!equal(await derive(current,row.salt),row.digest))fail(400,'当前密码不正确');
+    const salt=crypto.randomUUID(), digest=await derive(next,salt);
+    const result=await env.DB.batch([
+      env.DB.prepare('UPDATE users SET salt=?,digest=?,must_change_password=0 WHERE id=? AND digest=?').bind(salt,digest,user.id,row.digest),
+      env.DB.prepare('DELETE FROM user_sessions WHERE user_id=?').bind(user.id),
+      env.DB.prepare('DELETE FROM login_attempts WHERE bucket=?').bind(bucket)
+    ]);
+    if(!result[0].meta.changes)fail(409,'密码已变更，请重新登录');
+    return json({ok:true},200,{'Set-Cookie':cookie(request,'',0)});
+  }
+  if(user.must_change_password)return json({error:'请先修改初始密码',code:'PASSWORD_CHANGE_REQUIRED'},403);
+  if(path==='/api/account/reads'&&method==='GET'){
+    const rows=await env.DB.prepare('SELECT notice_id FROM notice_reads WHERE user_id=?').bind(user.id).all<{notice_id:string}>();
+    return json({ids:rows.results.map(r=>r.notice_id)});
+  }
+  const readPath=path.match(/^\/api\/account\/reads\/([\w-]+)$/);
+  if(readPath&&['PUT','DELETE'].includes(method)){
+    const notice=await env.DB.prepare("SELECT id FROM notices WHERE id=? AND status='published'").bind(readPath[1]).first();
+    if(!notice)fail(404,'通知不存在或尚未发布');
+    if(method==='PUT')await env.DB.prepare('INSERT OR IGNORE INTO notice_reads(user_id,notice_id) VALUES(?,?)').bind(user.id,readPath[1]).run();
+    else await env.DB.prepare('DELETE FROM notice_reads WHERE user_id=? AND notice_id=?').bind(user.id,readPath[1]).run();
+    return json({ok:true});
   }
   if(path==='/api/notices'&&method==='GET'){
     const clauses=["status='published'"],args: string[]=[];
@@ -97,7 +133,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     return row?json({notice:mapNotice(row)}):json({error:'通知不存在或尚未发布'},404);
   }
   if(!path.startsWith('/api/admin/'))return json({error:'接口不存在'},404);
-  const admin=await session(request,env.DB); if(!admin)fail(401,'请先以班委身份登录');
+  if(user.role!=='committee')fail(403,'仅班委可进行此操作');
+  const admin=user;
   if(path==='/api/admin/parse-options'&&method==='GET')return json({llmAvailable:!!llmAdapter(env)});
   if(path==='/api/admin/parse'&&method==='POST'){
     const body=await readBody(request);const text=field(body.text,'群聊文本',20000,true);
