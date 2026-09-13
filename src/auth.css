@@ -4,6 +4,15 @@
 .auth-screen .notice-form input{font-size:16px}
 .auth-screen .modal::backdrop{background:transparent}
 .notice-card{position:relative;transition:background .2s,border-color .2s}
+.notice-card{cursor:pointer}
+.notice-card:focus-visible{outline:3px solid #97b3ff;outline-offset:3px}
+.install-app{margin:12px 0}
+.install-button{display:flex;align-items:center;justify-content:center;gap:8px;color:#285be8;font-size:13px;padding:10px 12px;min-height:40px;border:1px solid #dbe5fb;border-radius:8px;background:#f5f8ff;width:100%}
+.install-guide{font-size:12px;line-height:1.8;background:#f6f8fc;border-radius:8px;padding:12px;margin-top:10px;color:#64738b}
+.install-guide p+p{margin-top:8px}
+.app-update{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:14px;max-width:calc(100% - 24px);width:max-content;padding:12px 16px;background:#203458;color:white;border-radius:12px;box-shadow:0 4px 20px #20345833;font-size:13px}
+.app-update button{display:flex;align-items:center;gap:6px;color:white;white-space:nowrap;text-decoration:underline;padding:6px}
+@media(display-mode:standalone){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}}
 .notice-card.is-read{background:#f0f3f8;border-color:#e5eaf1;box-shadow:none}
 .notice-card.is-read .notice-title{color:#778498;font-weight:500}
 .notice-card.is-read .notice-preview{color:#8994a5}
