@@ -3,3 +3,11 @@
 .auth-screen .modal-head>.icon-button{display:none}
 .auth-screen .notice-form input{font-size:16px}
 .auth-screen .modal::backdrop{background:transparent}
+.notice-card{position:relative;transition:background .2s,border-color .2s}
+.notice-card.is-read{background:#f0f3f8;border-color:#e5eaf1;box-shadow:none}
+.notice-card.is-read .notice-title{color:#778498;font-weight:500}
+.notice-card.is-read .notice-preview{color:#8994a5}
+.notice-card.is-read .notice-symbol,.notice-card.is-read .category-badge{filter:grayscale(.7);opacity:.65}
+.notice-card.is-unread{border-color:#c5d6fb}
+.notice-card.is-unread .notice-meta{padding-right:30px}
+.unread-corner{position:absolute;top:0;right:0;padding:4px 9px;border-radius:0 14px 0 9px;background:#285be8;color:#fff;font-size:10px;line-height:1.5;font-weight:600}

@@ -94,7 +94,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if(attempt&&attempt.attempts>8)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const body=await readBody(request);
     const current=body.current_password, next=body.new_password;
-    if(typeof current!=='string'||current.length>256||typeof next!=='string'||next.length<12||next.length>256||!next.trim()||next===current)fail(400,'新密码须为 12—256 位，且不能与原密码相同');
+    if(typeof current!=='string'||current.length>256||typeof next!=='string'||next.length<6||next.length>256||!next.trim()||next===current)fail(400,'新密码须为 6—256 位，且不能与原密码相同');
     const row=await env.DB.prepare('SELECT salt,digest FROM users WHERE id=?').bind(user.id).first<{salt:string;digest:string}>();
     if(!row||!equal(await derive(current,row.salt),row.digest))fail(400,'当前密码不正确');
     const salt=crypto.randomUUID(), digest=await derive(next,salt);
@@ -104,6 +104,12 @@ async function route(request: Request, env: Env): Promise<Response> {
       env.DB.prepare('DELETE FROM login_attempts WHERE bucket=?').bind(bucket)
     ]);
     if(!result[0].meta.changes)fail(409,'密码已变更，请重新登录');
+    if(user.must_change_password){
+      const id=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
+      const created=await env.DB.prepare('INSERT INTO user_sessions(id_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND digest=?').bind(await sha256(id),Date.now()+28800000,user.id,digest).run();
+      if(!created.meta.changes)fail(409,'账号状态已变更，请重新登录');
+      return json({ok:true,user:{...user,must_change_password:false}},200,{'Set-Cookie':cookie(request,id,28800)});
+    }
     return json({ok:true},200,{'Set-Cookie':cookie(request,'',0)});
   }
   if(user.must_change_password)return json({error:'请先修改初始密码',code:'PASSWORD_CHANGE_REQUIRED'},403);

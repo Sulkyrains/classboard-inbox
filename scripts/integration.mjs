@@ -25,9 +25,14 @@ try{
   assert.equal((await call('/admin/notices')).status,403);
   assert.equal((await call('/account/reads')).status,403);
   assert.equal((await call('/account/password','POST',{current_password:secret,new_password:'short'})).status,400);
-  const newSecret=randomBytes(24).toString('hex');
-  assert.equal((await call('/account/password','POST',{current_password:secret,new_password:newSecret})).status,200);
+  const newSecret=randomBytes(3).toString('hex');
+  const changed=await call('/account/password','POST',{current_password:secret,new_password:newSecret});
+  assert.equal(changed.status,200);assert.equal((await changed.json()).user.must_change_password,false);
+  const renewedCookie=changed.headers.get('Set-Cookie').split(';')[0];assert.notEqual(renewedCookie,cookie);
   assert.equal((await call('/notices')).status,401);
+  cookie=renewedCookie;
+  assert.equal((await call('/notices')).status,200);
+  assert.equal((await call('/admin/notices')).status,403);
   assert.equal((await call('/login','POST',{student_id:'test-student',name:'测试同学',password:secret})).status,401);
   const studentAgain=await call('/login','POST',{student_id:'test-student',name:'测试同学',password:newSecret});
   assert.equal(studentAgain.status,200);

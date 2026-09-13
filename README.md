@@ -50,7 +50,7 @@ npm run dev
 
 ### 创建班级账号
 
-新版使用姓名、学号、密码登录，角色为 committee / student。首次登录必须先修改密码，新密码至少 12 位。旧 admins 记录保留但不再参与登录；没有公开注册入口。
+新版使用姓名、学号、密码登录，角色为 committee / student。首次登录必须先修改密码，新密码至少 6 位。旧 admins 记录保留但不再参与登录；没有公开注册入口。
 
 先执行数据库迁移，然后在 Git 忽略目录 `work/` 准备 JSON 数组，每项包含 `name` 和字符串类型的 `student_id`。本次 29 人、两列无标题的原始 Excel 可用以下脚本提取（其他格式请先整理为 JSON）：
 
@@ -71,7 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-accounts.ps1 
 
 维护者使用上述本机工具的 `-Reset "学号"` 参数，输入临时密码。工具撤销此人的所有会话并重新要求首次改密。无需删除重建账号，个人已读记录保留。旧 `admin:setup` 流程已停用。
 
-会话 Cookie 使用 HttpOnly、SameSite=Strict 和 HTTPS Secure，有效期 8 小时。登录及修改密码失败会限速。修改密码后所有设备须重新登录。
+会话 Cookie 使用 HttpOnly、SameSite=Strict 和 HTTPS Secure，有效期 8 小时。登录及修改密码失败会限速。首次改密后为当前设备签发新会话并直接进入看板；之后在个人设置中改密仍要求重新登录，其他旧会话均失效。
 
 ## 使用群消息解析
 
@@ -155,7 +155,7 @@ npm run deploy
 node scripts/seed.mjs --remote
 ```
 
-然后按上文运行账号导入工具，加上 `--remote` 写入线上数据库。用户以姓名、学号和初始密码登录，完成改密后重新登录进入看板。部署前应核对目标数据库及 Pages 项目。
+然后按上文运行账号导入工具，加上 `--remote` 写入线上数据库。用户以姓名、学号和初始密码登录，首次改密后直接进入看板。部署前应核对目标数据库及 Pages 项目。
 
 `scripts/package-connector.mjs` 另提供 API 直接上传打包形式，供有 Cloudflare API 连接的环境使用。该变体把应用小文件嵌入 Worker，OCR 引擎通过固定版本 CDN 路径代理；全部请求会计入 Functions 额度。它不参与常规 `npm run deploy`，日常维护优先用上面的标准静态部署方式。
 
@@ -207,10 +207,12 @@ scripts/                   构建、种子数据、账号初始化与验证
 
 - D1 新增 users、user_sessions、notice_reads，旧会话失效，保留历史通知及管理员记录。
 - GET /api/session 返回 user（含 role 与 must_change_password）；POST /api/login 接收 name、student_id、password。
-- POST /api/account/password 接收 current_password 与 new_password；成功后注销所有会话。
+- POST /api/account/password 接收 current_password 与 new_password；成功后注销旧会话；首次改密返回新会话与 user，直接进入系统。
 - GET /api/account/reads 返回本人已读 ID；PUT /api/account/reads/:id 标记已读，DELETE 撤销已读。
 - 未登录读取通知返回 401；首次改密前业务接口返回 403；同学调用 /api/admin/* 返回 403。
 - 保留 21 条解析/OCR 单元测试，集成测试增加姓名校验、首次改密、旧密码和会话失效、学生权限、已读隔离与跨设备读取。
 - 名单及密码不包含在静态网站、Git 或源码包内。初始账号的实际激活和改密由账号本人完成。
 - 线上已核验 29 个账号：班委 1 人、同学 28 人，全部要求首次改密。抽测班委与同学的登录后及时退出，未改变用户密码。
 - 旧匿名版历史部署已下线（原部署地址返回 404），防止旧 Worker 继续公开读取当前数据库。旧源码仍保存在 Git 历史；不要将匿名版重新部署到此数据库。
+
+本次体验优化：已读通知卡片使用淡灰背景和较淡文字，未读通知右上角显示“未读”角标；标记状态继续按账号同步。登录输入框只保留外部标签，去除占位文字。首次改密测试覆盖 5 位拒绝、6 位接受、会话轮换及无需重复登录即可读取通知。
