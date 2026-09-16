@@ -1,0 +1,43 @@
+{
+  "packageId": "cn.classboard.inbox",
+  "host": "classboard-inbox.pages.dev",
+  "name": "知会 · 班级通知看板",
+  "launcherName": "知会",
+  "display": "standalone",
+  "themeColor": "#285be8",
+  "themeColorDark": "#0d1526",
+  "navigationColor": "#ffffff",
+  "navigationColorDark": "#0d1526",
+  "navigationDividerColor": "#eaf0f6",
+  "navigationDividerColorDark": "#22304e",
+  "backgroundColor": "#f6f8fc",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://classboard-inbox.pages.dev/icons/app-512.png",
+  "maskableIconUrl": "https://classboard-inbox.pages.dev/icons/maskable-512.png",
+  "monochromeIconUrl": null,
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "1.1.0",
+  "appVersionCode": 2,
+  "shortcuts": [],
+  "generatorApp": "Bubblewrap",
+  "webManifestUrl": "https://classboard-inbox.pages.dev/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "includeSourceCode": false,
+  "orientation": "default",
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "appVersion": "1.1.0"
+}

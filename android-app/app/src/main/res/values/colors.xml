@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="windowBackground">#F6F8FC</color>
+    <color name="statusBar">#285BE8</color>
+    <color name="navBar">#FFFFFF</color>
+</resources>
