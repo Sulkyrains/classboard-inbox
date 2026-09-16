@@ -238,3 +238,45 @@ scripts/                   构建、种子数据、账号初始化与验证
 「全部通知」数字统计全体已发布通知中的个人未读数；「通知列表」数字统计当前筛选结果中的未读数。已读卡片仍可查看，今日通知总数与班委管理计数保留原有含义。
 
 验证包括 25 条单元测试（含 4 条 PWA 清单、图标、离线回退与私有接口不缓存测试）、接口集成测试，以及浏览器卡片点击、已读按钮独立操作、角标由 1 → 0 → 1 的交互测试。手机实机安装仍需用户在自己的设备上完成。
+
+## 新通知推送（Web Push）与日程订阅
+
+2026-09-14 新增功能：手机推送、iCal 日程订阅、深色模式、截止时间倒计时高亮、通知正文 Markdown 渲染。
+
+### 手机推送（Web Push）
+
+- 用户在「个人账号」窗口点击「开启新通知推送」，授权后设备会收到新通知的锁屏推送；可发送测试推送验证，也可随时关闭。
+- 安卓 Chrome/Edge 直接支持；iPhone/iPad 需先「添加到主屏幕」，从桌面打开后再开启推送。
+- 服务端使用 VAPID + aes128gcm 加密（RFC 8291/8292），仅用 Web Crypto 实现，无新增运行时依赖；推送内容只有通知分类、标题与正文摘要。
+- 部署前需配置密钥：
+  1. `node scripts/generate-vapid.mjs` 生成一对密钥（只生成一次，妥善保存）。
+  2. 本地开发：写入 `.dev.vars`（已被 .gitignore 排除）。
+  3. 线上：`npx wrangler pages secret put VAPID_PUBLIC_KEY`、`npx wrangler pages secret put VAPID_PRIVATE_KEY`，再可配置 `VAPID_SUBJECT`（mailto: 联系方式，可省略）。
+  4. 首次部署需应用数据库迁移：`npx wrangler d1 migrations apply classboard-inbox --remote`（新增 0004 推送订阅表、0005 日历令牌列）。
+- 未配置密钥时推送相关接口返回 503，网站其余功能不受影响；已失效的推送订阅会在发送后自动清理。
+
+### 日程订阅（iCal）
+
+- 「个人账号」窗口点击「订阅班级日程到手机日历」复制订阅链接，在手机日历 App 中「订阅日历」粘贴即可；日程随通知发布自动更新。
+- 订阅链接含个人令牌（64 位十六进制），仅暴露带活动/截止时间的已发布通知，不包含已读等私有数据；请勿公开分享链接。
+
+### 深色模式
+
+- 顶栏月亮/太阳按钮切换，首次访问跟随系统设置，选择会保存在本机。
+
+### Markdown 与截止提醒
+
+- 通知正文支持 Markdown（标题、列表、链接、代码等），经 DOMPurify 消毒后渲染；链接自动在新标签页打开。
+- 带「截止时间」的通知卡片显示倒计时徽章：24 小时内红色、72 小时内橙色。
+
+### 安装与分发指引
+
+- 网站「个人账号」弹窗和登录页内置分平台安装指引：微信/QQ 内置浏览器会提示「用系统浏览器打开」；iPhone Safari 按步骤「分享 → 添加到主屏幕」；安卓 Chrome 收推送无需安装，安装桌面图标走菜单「安装应用」。
+- 安卓 App（`android-app/`，原生 Activity + WebView 壳，无 AndroidX、不依赖谷歌服务）：
+  1. **直接分发**：安装包随网站发布，手机浏览器打开 `https://classboard-inbox.pages.dev/classboard.apk` 下载安装（允许「未知来源」即可）；也可把该链接/APK 文件发到班级群。
+  2. App 每约 15 分钟在后台轮询一次通知接口，有新通知即弹系统通知，因此不依赖 FCM / GMS；App 在前台时新通知立即弹出，登录状态保留 30 天。
+  3. 重新打包：在 `android-app/` 下执行 `sh gradlew assembleRelease`（需 JDK17 与 Android SDK，SDK 路径写在本地 `local.properties`），再 `zipalign -p 4`、`apksigner sign` 后覆盖 `public/classboard.apk`。签名密钥 `android/android.keystore` 与密码仅本地保管，勿外传、勿入库。
+  4. 发版时同步提升 `android-app/app/build.gradle` 的 `versionCode` 与 `public/app-version.json`，已装旧版会自行提示更新；换签名密钥还需同步更新 `public/.well-known/assetlinks.json` 的 SHA-256 指纹并重新部署。
+- iPhone 无 Apple 开发者账号暂不打包，使用 Safari「添加到主屏幕」方案（功能与 APK 一致：独立窗口 + 推送）。
+
+验证：typecheck、27 条单元测试（新增 Web Push 加密往返与失效端点清理测试）、本地 wrangler pages dev 走查（登录、发布 Markdown 通知、倒计时徽章、深色切换、ICS 输出、推送订阅校验）。真机推送需完成上述密钥配置后在自己的手机上验证。

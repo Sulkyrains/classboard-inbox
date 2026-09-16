@@ -1,0 +1,1 @@
+ALTER TABLE notice_reads ADD COLUMN state TEXT NOT NULL DEFAULT 'read';

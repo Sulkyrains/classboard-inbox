@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "cn.classboard.inbox",
+      "sha256_cert_fingerprints": [
+        "BE:C1:A5:3E:9E:10:C0:5A:3E:36:E2:57:DC:F9:FD:22:C3:58:F7:51:0E:D4:FE:3D:66:AF:77:A7:6A:B1:AB:DC"
+      ]
+    }
+  }
+]
