@@ -275,8 +275,10 @@ scripts/                   构建、种子数据、账号初始化与验证
 - 安卓 App（`android-app/`，原生 Activity + WebView 壳，无 AndroidX、不依赖谷歌服务）：
   1. **直接分发**：安装包随网站发布，手机浏览器打开 `https://classboard-inbox.pages.dev/classboard.apk` 下载安装（允许「未知来源」即可）；也可把该链接/APK 文件发到班级群。
   2. App 每约 15 分钟在后台轮询一次通知接口，有新通知即弹系统通知，因此不依赖 FCM / GMS；App 在前台时新通知立即弹出，登录状态保留 30 天。
-  3. 重新打包：在 `android-app/` 下执行 `sh gradlew assembleRelease`（需 JDK17 与 Android SDK，SDK 路径写在本地 `local.properties`），再 `zipalign -p 4`、`apksigner sign` 后覆盖 `public/classboard.apk`。签名密钥 `android/android.keystore` 与密码仅本地保管，勿外传、勿入库。
-  4. 发版时同步提升 `android-app/app/build.gradle` 的 `versionCode` 与 `public/app-version.json`，已装旧版会自行提示更新；换签名密钥还需同步更新 `public/.well-known/assetlinks.json` 的 SHA-256 指纹并重新部署。
+  3. **自动更新**：启动时与后台轮询时读取 `public/app-version.json`，发现更高 `versionCode` 就自动把安装包下载到应用私有目录，校验包名、版本号、签名与当前 App 一致后，应用内弹「立即安装」或发一条「已下载」通知，点按即拉起系统安装器，全程不用浏览器；「个人账号」弹窗内也有「检查 App 更新」入口。校验不通过的安装包会被直接丢弃。
+  4. **边到边留白**：Android 15 起系统强制边到边绘制，App 按系统 insets 给页面留出状态栏 / 导航栏空间，并随网页深浅色切换留白区底色与状态栏图标明暗，顶部不会再被状态栏压住。
+  5. 重新打包：在 `android-app/` 下执行 `sh gradlew assembleRelease`（需 JDK17 与 Android SDK，SDK 路径写在本地 `local.properties`），再 `zipalign -p 4`、`apksigner sign` 后覆盖 `public/classboard.apk`。签名密钥 `android/android.keystore` 与密码仅本地保管，勿外传、勿入库。
+  6. 发版时同步提升 `android-app/app/build.gradle` 的 `versionCode` 与 `public/app-version.json`，已装旧版会自动下载并提示安装；换签名密钥还需同步更新 `public/.well-known/assetlinks.json` 的 SHA-256 指纹并重新部署。
 - iPhone 无 Apple 开发者账号暂不打包，使用 Safari「添加到主屏幕」方案（功能与 APK 一致：独立窗口 + 推送）。
 
 验证：typecheck、27 条单元测试（新增 Web Push 加密往返与失效端点清理测试）、本地 wrangler pages dev 走查（登录、发布 Markdown 通知、倒计时徽章、深色切换、ICS 输出、推送订阅校验）。真机推送需完成上述密钥配置后在自己的手机上验证。

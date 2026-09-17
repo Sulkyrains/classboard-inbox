@@ -12,6 +12,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.util.Log;
 import android.webkit.CookieManager;
 
 import org.json.JSONArray;
@@ -31,9 +32,9 @@ public final class Notifier {
     static final String SITE = "https://classboard-inbox.pages.dev/";
     static final String API_NOTICES = "https://classboard-inbox.pages.dev/api/notices";
     static final String API_VERSION = "https://classboard-inbox.pages.dev/app-version.json";
+    static final String CHANNEL = "classboard-notices";
+    static final String UA = "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + ") AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36 ClassboardApp/" + BuildConfig.VERSION_NAME;
     private static final String PREFS = "classboard";
-    private static final String CHANNEL = "classboard-notices";
-    private static final String UA = "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + ") AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36 ClassboardApp/" + BuildConfig.VERSION_NAME;
     private static final int JOB_ID = 4101;
     private static final int MAX_SEEN = 800;
     private static final long POLL_THROTTLE_MS = 60_000L;
@@ -41,15 +42,23 @@ public final class Notifier {
     private Notifier() {}
 
     static void schedule(Context context) {
-        JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
-        if (scheduler == null) return;
-        for (JobInfo job : scheduler.getAllPendingJobs()) if (job.getId() == JOB_ID) return;
-        JobInfo info = new JobInfo.Builder(JOB_ID, new ComponentName(context, PollJobService.class))
-                .setPersisted(true)
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPeriodic(15 * 60 * 1000L)
-                .build();
-        scheduler.schedule(info);
+        // 部分定制系统上 JobScheduler 会抛异常，轮询失败也不能影响界面
+        try {
+            JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (scheduler == null) return;
+            try {
+                for (JobInfo job : scheduler.getAllPendingJobs()) if (job.getId() == JOB_ID) return;
+            } catch (Throwable ignored) {
+            }
+            JobInfo info = new JobInfo.Builder(JOB_ID, new ComponentName(context, PollJobService.class))
+                    .setPersisted(true)
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setPeriodic(15 * 60 * 1000L)
+                    .build();
+            scheduler.schedule(info);
+        } catch (Throwable t) {
+            Log.w("classboard", "JobScheduler unavailable", t);
+        }
     }
 
     static void refreshAsync(final Context context) {
@@ -64,6 +73,7 @@ public final class Notifier {
         long now = System.currentTimeMillis();
         if (now - prefs.getLong("last_poll_ms", 0L) < POLL_THROTTLE_MS) return;
         prefs.edit().putLong("last_poll_ms", now).apply();
+        Updater.checkInBackground(context);  // 版本检查与登录状态无关
         String cookie = cookie(context);
         if (cookie == null || !cookie.contains("cb_session=")) return;
         JSONArray notices = fetchNotices(cookie);
@@ -96,29 +106,12 @@ public final class Notifier {
         }
         saveSeen(prefs, next);
         prefs.edit().putBoolean("seeded", true).apply();
-
-        checkUpdate(context, prefs, cookie);
     }
 
     private static JSONArray fetchNotices(String cookie) {
         String text = httpGet(API_NOTICES, cookie);
         if (text == null) return null;
         try { return new JSONObject(text).optJSONArray("notices"); } catch (Exception e) { return null; }
-    }
-
-    private static void checkUpdate(Context context, SharedPreferences prefs, String cookie) {
-        String text = httpGet(API_VERSION, cookie);
-        if (text == null) return;
-        try {
-            JSONObject info = new JSONObject(text);
-            int code = info.optInt("versionCode", 0);
-            if (code <= BuildConfig.VERSION_CODE) return;
-            if (prefs.getInt("update_notified", 0) >= code) return;
-            prefs.edit().putInt("update_notified", code).apply();
-            notify(context, "update", "知会 App 有新版本",
-                    "点击下载更新（" + info.optString("versionName", "") + "），安装后自动保留登录状态。",
-                    info.optString("url", SITE));
-        } catch (Exception ignored) {}
     }
 
     /** 网页内新通知：走 JS 桥，id 用于去重，避免与后台轮询重复提醒。 */
@@ -206,7 +199,7 @@ public final class Notifier {
         prefs.edit().putString("seen_ids", array.toString()).apply();
     }
 
-    private static String httpGet(String url, String cookie) {
+    static String httpGet(String url, String cookie) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();

@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react';
 import {BellRing, BellOff, Send, Download, RefreshCw, Sun, Moon, PackageOpen} from 'lucide-react';
 import {api} from './api';
 import {envKind,guideFor,type EnvKind} from './install-guide';
-import {isApp,isIOS} from './ua';
+import {isApp,isIOS,syncAppTheme} from './ua';
 
 interface InstallPrompt extends Event {prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>}
 let prompt:InstallPrompt|null=null;
@@ -36,6 +36,12 @@ export function AppUpdate(){
   useEffect(()=>{const update=()=>setReady(updateReady);window.addEventListener('pwa-state',update);return()=>window.removeEventListener('pwa-state',update);},[]);
   return ready?<div className="app-update" role="status"><span>新版已就绪，请先保存正在编辑的内容。</span><button type="button" onClick={()=>location.reload()}><RefreshCw size={15}/>刷新更新</button></div>:null;
 }
+/** 安卓 App 内显示：当前版本 + 手动检查更新（新版本由 App 自动下载）。 */
+export function AppUpdateRow(){
+  if(!isApp()||!window.AndroidApp?.checkUpdate)return null;
+  const version=window.AndroidApp.version?.()??'';
+  return <div className="install-app"><button type="button" className="install-button" onClick={()=>{try{window.AndroidApp?.checkUpdate?.();}catch{}}}><RefreshCw size={16}/>检查 App 更新{version?`（当前 ${version}）`:''}</button></div>;
+}
 export function ThemeToggle(){
   const [dark,setDark]=useState(()=>document.documentElement.dataset.theme==='dark');
   const toggle=()=>{
@@ -43,6 +49,7 @@ export function ThemeToggle(){
     document.documentElement.dataset.theme=next?'dark':'';
     document.documentElement.style.colorScheme=next?'dark':'light';
     localStorage.setItem('cb-theme',next?'dark':'light');
+    syncAppTheme();
   };
   return <button type="button" className="icon-button theme-toggle" aria-label={dark?'切换到浅色模式':'切换到深色模式'} title={dark?'切换到浅色模式':'切换到深色模式'} onClick={toggle}>{dark?<Sun size={17}/>:<Moon size={17}/>}</button>;
 }

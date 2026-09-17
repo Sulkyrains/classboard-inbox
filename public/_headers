@@ -16,3 +16,7 @@
   Cache-Control: no-cache
 /offline.html
   Cache-Control: no-cache
+/classboard.apk
+  Cache-Control: no-cache
+/app-version.json
+  Cache-Control: no-cache
