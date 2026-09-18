@@ -23,15 +23,22 @@ export default function App(){
   if(error)return <div className="auth-screen"><p role="alert">{error}</p><button className="button primary" onClick={check}>重试</button></div>;
   if(!user)return <div className="auth-screen"><Login onClose={()=>{}} onLogin={setUser}/></div>;
   if(user.must_change_password)return <div className="auth-screen"><PasswordForm required onDone={u=>setUser(u||null)} onClose={()=>{}}/></div>;
-  return <><Board key={user.id} user={user} onLogout={()=>setUser(null)} onSettings={()=>setSettings(true)}/>{settings&&<PasswordForm onClose={()=>setSettings(false)} onDone={()=>{setSettings(false);setUser(null);}}/>}</>;
+  return <><Board key={user.id} user={user} onLogout={()=>setUser(null)} onSettings={()=>setSettings(true)}/>{settings&&<PasswordForm onClose={()=>setSettings(false)} onDone={()=>{setSettings(false);void clearOfflineCache();setUser(null);}}/>}</>;
 }
 
 function PasswordForm({required=false,onDone,onClose}:{required?:boolean;onDone:(user?:Admin)=>void;onClose:()=>void}){
   const [busy,setBusy]=useState(false),[error,setError]=useState('');
   const submit=async(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const data=new FormData(e.currentTarget);if(data.get('new_password')!==data.get('confirm')){setError('两次新密码不一致');return;}setBusy(true);setError('');try{const result=await api<{user?:Admin}>('/account/password',{method:'POST',body:JSON.stringify({current_password:data.get('current_password'),new_password:data.get('new_password')})});onDone(result.user);}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
-  return <Modal title={required?'首次登录 · 修改密码':'修改个人密码'} onClose={onClose}><form className="notice-form" onSubmit={submit}><p className="muted">{required?'请先修改初始密码，再进入班级看板。':'修改后将退出所有设备，请使用新密码重新登录。'}</p><label>当前密码<input name="current_password" type="password" autoComplete="current-password" required maxLength={256}/></label><label>新密码<input name="new_password" type="password" autoComplete="new-password" required minLength={6} maxLength={256} placeholder="至少 6 位"/></label><label>再次输入新密码<input name="confirm" type="password" autoComplete="new-password" required minLength={6} maxLength={256}/></label>{error&&<p role="alert" className="error">{error}</p>}<button className="button primary" disabled={busy}>{busy?'正在保存…':required?'保存并进入系统':'保存并重新登录'}</button>{required&&<button type="button" className="button secondary" onClick={async()=>{try{await api('/logout',{method:'POST',body:'{}'});onDone();}catch(e){setError((e as Error).message);}}}>退出登录</button>}</form></Modal>;
+  return <Modal title={required?'首次登录 · 修改密码':'修改个人密码'} onClose={onClose}><form className="notice-form" onSubmit={submit}><p className="muted">{required?'请先修改初始密码，再进入班级看板。':'修改后将退出所有设备，请使用新密码重新登录。'}</p><label>当前密码<input name="current_password" type="password" autoComplete="current-password" required maxLength={256}/></label><label>新密码<input name="new_password" type="password" autoComplete="new-password" required minLength={6} maxLength={256} placeholder="至少 6 位"/></label><label>再次输入新密码<input name="confirm" type="password" autoComplete="new-password" required minLength={6} maxLength={256}/></label>{error&&<p role="alert" className="error">{error}</p>}<button className="button primary" disabled={busy}>{busy?'正在保存…':required?'保存并进入系统':'保存并重新登录'}</button>{required&&<button type="button" className="button secondary" onClick={async()=>{try{await api('/logout',{method:'POST',body:'{}'});await clearOfflineCache();onDone();}catch(e){setError((e as Error).message);}}}>退出登录</button>}</form></Modal>;
 }
 
+/** 退出登录后清掉离线缓存：共用设备上不应让下一个人离线读到上一个人的通知。 */
+const clearOfflineCache=async()=>{
+  try{
+    if(!('caches' in window))return;
+    for(const name of await caches.keys())if(name.startsWith('classboard-'))await caches.delete(name);
+  }catch{}
+};
 const notifyNew=(list:Notice[])=>{
   try{
     const seenAt=Date.now();
@@ -84,7 +91,7 @@ function Board({user,onLogout,onSettings}:{user:Admin;onLogout:()=>void;onSettin
   const save=async(n:NoticeInput)=>{const existing=edit&&'id'in edit?edit:null;await api(existing?`/admin/notices/${existing.id}`:'/admin/notices',{method:existing?'PUT':'POST',body:JSON.stringify({...n,...(existing?{version:existing.version}:{})})});setEdit(null);setToast(existing?'通知已更新':'通知已发布');await refresh();};
   const pin=async(n:Notice)=>{try{await api(`/admin/notices/${n.id}`,{method:'PUT',body:JSON.stringify({...n,pinned:!n.pinned})});setToast(n.pinned?'已取消置顶':'已置顶');await refresh();}catch(e){setToast((e as Error).message);}};
   const doAction=async()=>{if(!confirm)return;setActionBusy(true);try{await api(`/admin/notices/${confirm.n.id}/${confirm.action}`,{method:'POST',body:JSON.stringify({version:confirm.n.version})});setConfirm(null);setDetail(null);setToast('操作成功');await refresh();}catch(e){setToast((e as Error).message);}finally{setActionBusy(false);}};
-  const logout=async()=>{try{await api('/logout',{method:'POST',body:'{}'});onLogout();}catch(e){setToast((e as Error).message);}};
+  const logout=async()=>{try{await api('/logout',{method:'POST',body:'{}'});await clearOfflineCache();onLogout();}catch(e){setToast((e as Error).message);}};
   const nav=[{id:'today' as Page,label:'今日看板',icon:LayoutDashboard},{id:'notices' as Page,label:'全部通知',icon:Bell},{id:'schedule' as Page,label:'近期日程',icon:CalendarDays}];
   const card=(n:Notice)=>{const Icon=icons[n.category];const expired=isExpired(n,now);const end=effectiveEnd(n);const remaining=end?Date.parse(end)-now:Infinity;const urgency=n.deadline_at&&!expired?(remaining<24*3600000?'urgent':remaining<3*86400000?'soon':''):'';return <article key={n.id} tabIndex={0} aria-label={`查看通知详情：${n.title}`} onClick={e=>{if(!(e.target as Element).closest('button,a,input,select,textarea'))open(n);}} onKeyDown={e=>{if(e.target===e.currentTarget&&(e.key==='Enter'||e.key===' ')){e.preventDefault();open(n);}}} className={`notice-card ${n.pinned?'is-pinned':''} ${expired?'is-expired':''} ${n.status==='published'?(read.includes(n.id)?'is-read':'is-unread'):''}`}>
     {n.status==='published'&&(done.includes(n.id)?<span className="unread-corner done-corner" aria-label="已完成">已完成</span>:!read.includes(n.id)&&<span className="unread-corner" aria-label="未读通知">未读</span>)}<div className={`notice-symbol ${catClass[n.category]}`}><Icon size={22}/></div><div className="notice-main"><div className="notice-meta"><span className={`category-badge ${catClass[n.category]}`}>{n.category}</span>{n.pinned&&<span className="pin-label"><Pin size={12}/>置顶</span>}{page==='manage'&&<span className="muted">{statusNames[n.status]}</span>}<span className="notice-time">{formatDate(n.published_at||n.created_at)} {n.published_at?'发布':'创建'}</span></div>
@@ -121,9 +128,13 @@ function Board({user,onLogout,onSettings}:{user:Admin;onLogout:()=>void;onSettin
 }
 function Empty({title,text}:{title:string;text:string}){return <div className="empty"><div><Inbox size={30}/></div><h3>{title}</h3><p>{text}</p></div>;}
 function CalendarSubscribe(){
-  const [hint,setHint]=useState('');
-  const copy=async()=>{try{const r=await api<{url:string}>('/account/calendar-token',{method:'POST',body:'{}'});await navigator.clipboard.writeText(r.url);setHint('订阅链接已复制。在手机日历 App 中选择「订阅日历」（iOS 为「添加账户 → 其他 → 订阅的日历」），粘贴即可同步班级日程。');}catch(e){setHint((e as Error).message);}};
-  return <div className="install-app"><button type="button" className="install-button" onClick={()=>void copy()}><CalendarPlus size={16}/>订阅班级日程到手机日历</button>{hint&&<p className="field-hint" role="status">{hint}</p>}</div>;
+  const [hint,setHint]=useState(''),[busy,setBusy]=useState(false),[resetting,setResetting]=useState(false);
+  const copy=async(rotate=false)=>{setBusy(true);try{const r=await api<{url:string}>('/account/calendar-token',{method:'POST',body:JSON.stringify({rotate})});await navigator.clipboard.writeText(r.url);setResetting(false);setHint(rotate?'已生成新的订阅链接并复制。旧链接立即失效，请在日历 App 中删除旧订阅后重新添加。':'订阅链接已复制。在手机日历 App 中选择「订阅日历」（iOS 为「添加账户 → 其他 → 订阅的日历」），粘贴即可同步班级日程。');}catch(e){setHint((e as Error).message);}finally{setBusy(false);}};
+  return <div className="install-app"><button type="button" className="install-button" disabled={busy} onClick={()=>void copy()}><CalendarPlus size={16}/>订阅班级日程到手机日历</button>
+    {resetting
+      ? <><p className="field-hint">重置后旧链接立刻失效，已添加过订阅的设备需要重新添加。确定继续吗？</p><button type="button" className="install-button" disabled={busy} onClick={()=>void copy(true)}><RefreshCw size={16}/>确认重置并复制新链接</button><button type="button" className="install-button" disabled={busy} onClick={()=>setResetting(false)}>取消</button></>
+      : <button type="button" className="install-button" disabled={busy} onClick={()=>{setHint('');setResetting(true);}}><RefreshCw size={16}/>链接外泄了？重置订阅链接</button>}
+    {hint&&<p className="field-hint" role="status">{hint}</p>}</div>;
 }
 function Login({onClose,onLogin}:{onClose:()=>void;onLogin:(a:Admin)=>void}){
   const [busy,setBusy]=useState(false),[error,setError]=useState('');

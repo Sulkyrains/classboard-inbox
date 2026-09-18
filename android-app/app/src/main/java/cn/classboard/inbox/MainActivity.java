@@ -39,6 +39,7 @@ import java.io.InputStreamReader;
 
 public class MainActivity extends Activity {
     static final String EXTRA_INSTALL = "cn.classboard.inbox.install";
+    private static final String SITE_HOST = "classboard-inbox.pages.dev";
     private static final String TAG = "classboard";
     private static final int BG_LIGHT = 0xFFF6F8FC;
     private static final int BG_DARK = 0xFF0D1526;
@@ -158,7 +159,7 @@ public class MainActivity extends Activity {
                 View child = root.getChildAt(i);
                 if (child != webView) child.bringToFront();
             }
-            try { WebView.setWebContentsDebuggingEnabled(true); } catch (Throwable ignored) {}
+            try { WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG); } catch (Throwable ignored) {}
             return true;
         } catch (Throwable t) {
             // WebView 组件缺失或损坏时，给一个能看懂的提示，而不是黑屏后闪退
@@ -213,8 +214,10 @@ public class MainActivity extends Activity {
     }
 
     private boolean openUrl(Uri uri) {
+        // 只有班级站本身留在 WebView 里：这里注入了 AndroidApp 桥，任何别的站点都必须交给系统浏览器。
+        // 注意不能用 endsWith("pages.dev")，那会放行 evilpages.dev 和任意 *.pages.dev 项目。
         String host = uri.getHost();
-        if (host != null && host.endsWith("pages.dev")) return false;
+        if (SITE_HOST.equalsIgnoreCase(host)) return false;
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, uri));
         } catch (Throwable ignored) {
