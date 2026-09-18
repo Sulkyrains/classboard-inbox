@@ -2,14 +2,20 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { readFile,readdir } from 'node:fs/promises';
 import { randomBytes,randomUUID,pbkdf2Sync } from 'node:crypto';
 import assert from 'node:assert/strict';
-const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await readFile('dist/_worker.js','utf8'),compatibilityDate:'2026-09-09',d1Databases:['DB']}));
+const vapid=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+const vapidKeys={VAPID_PUBLIC_KEY:Buffer.from(new Uint8Array(await crypto.subtle.exportKey('raw',vapid.publicKey))).toString('base64url'),VAPID_PRIVATE_KEY:(await crypto.subtle.exportKey('jwk',vapid.privateKey)).d};
+const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await readFile('dist/_worker.js','utf8'),compatibilityDate:'2026-09-09',d1Databases:['DB'],bindings:vapidKeys}));
 try{
   const db=await mf.getD1Database('DB');
   for(const file of (await readdir('migrations')).sort())for(const statement of (await readFile('migrations/'+file,'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
   const secret=randomBytes(24).toString('hex'),salt=randomBytes(16).toString('hex');
   await db.prepare("INSERT INTO users(id,student_id,display_name,role,salt,digest,created_at,must_change_password) VALUES(?,?,?,'committee',?,?,?,0)").bind(randomUUID(),'integration-admin','测试班委',salt,pbkdf2Sync(secret,salt,100000,32,'sha256').toString('hex'),new Date().toISOString()).run();
   let cookie='';
-  const call=(path,method='GET',body,auth=true,origin='https://example.test')=>mf.dispatchFetch('https://example.test/api'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(auth&&cookie?{Cookie:cookie}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  let etagHeader=null;
+  const call=(path,method='GET',body,auth=true,origin='https://example.test')=>mf.dispatchFetch('https://example.test/api'+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(auth&&cookie?{Cookie:cookie}:{}),...(etagHeader?{'If-None-Match':etagHeader}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  const revalidate=async path=>{etagHeader=null;const first=await call(path);const tag=first.headers.get('ETag');
+    etagHeader=tag;const second=await call(path);etagHeader=null;
+    return {tag,status:first.status,cached:second.status,cachedBody:await second.text()};};
   assert.equal((await call('/admin/notices')).status,401);
   assert.equal((await call('/login','POST',{student_id:'integration-admin',name:'测试班委',password:secret},false,'https://evil.test')).status,403);
   const login=await call('/login','POST',{student_id:'integration-admin',name:'测试班委',password:secret});assert.equal(login.status,200);
@@ -82,15 +88,65 @@ try{
   cookie=studentCookie;
   const studentView=await(await call('/notices')).json();assert.equal(studentView.notices[0].source_text,undefined);assert.equal(studentView.notices[0].warnings,undefined);
   assert.deepEqual((await(await call('/account/reads')).json()).ids,[]);
+  // 推送订阅：只接受真实推送服务的域名，且每人最多 5 台设备（重复的 endpoint 算更新，不算新增）
+  const sub=(endpoint,keys={p256dh:'test-p256dh',auth:'test-auth'})=>call('/account/push/subscribe','POST',{endpoint,keys});
+  assert.equal((await sub('https://attacker.test/hook')).status,400);
+  assert.equal((await sub('http://fcm.googleapis.com/fcm/send/x')).status,400);
+  assert.equal((await sub('https://fcm.googleapis.com.attacker.test/x')).status,400);
+  assert.equal((await sub('https://evilpush.apple.com/x')).status,400);
+  for(let i=0;i<5;i++)assert.equal((await sub('https://web.push.apple.com/device-'+i)).status,201);
+  assert.equal((await sub('https://web.push.apple.com/device-5')).status,400);
+  assert.equal((await sub('https://web.push.apple.com/device-3',{p256dh:'rotated',auth:'rotated'})).status,201);
+  // 日程订阅链接可以重置，旧链接立刻失效
+  const firstToken=(await(await call('/account/calendar-token','POST',{})).json()).token;
+  assert.equal((await(await call('/account/calendar-token','POST',{})).json()).token,firstToken);
+  const rotatedToken=(await(await call('/account/calendar-token','POST',{rotate:true})).json()).token;
+  assert.notEqual(rotatedToken,firstToken);
+  assert.equal((await mf.dispatchFetch('https://example.test/api/calendar?token='+firstToken)).status,404);
+  assert.equal((await mf.dispatchFetch('https://example.test/api/calendar?token='+rotatedToken)).status,200);
+  // 弱口令不能作为新密码
+  assert.equal((await call('/account/password','POST',{current_password:newSecret,new_password:'123456'})).status,400);
+  assert.equal((await call('/account/password','POST',{current_password:newSecret,new_password:'test-student'})).status,400);
   assert.equal((await call('/account/password','POST',{current_password:newSecret,new_password:newSecret})).status,400);
   assert.equal((await call('/account/password','POST',{current_password:'wrong',new_password:randomBytes(24).toString('hex')})).status,400);
   assert.equal((await call('/account/password','POST',{current_password:newSecret,new_password:randomBytes(24).toString('hex')})).status,200);
   assert.equal((await call('/notices')).status,401);
   cookie=otherDevice.headers.get('Set-Cookie').split(';')[0];assert.equal((await call('/notices')).status,401);
+  // ---- 通知列表的 ETag 校验：内容没变时回 304，不再扫描整张表 ----
+  cookie=committeeCookie;
+  const feed=await revalidate('/notices');
+  assert.match(feed.tag,/^"\d+-[a-f0-9]{16}"$/);      // 版本号 + 查询范围的指纹
+  assert.equal(feed.status,200);
+  assert.equal(feed.cached,304);
+  assert.equal(feed.cachedBody,'');                    // 304 不能带正文
+  const adminFeed=await revalidate('/admin/notices');
+  assert.equal(adminFeed.cached,304);
+  assert.notEqual(adminFeed.tag,feed.tag);             // 公开列表与管理列表互不串用
+  const filtered=await revalidate('/notices?category=作业');
+  assert.notEqual(filtered.tag,feed.tag);              // 不同筛选条件不能共用同一个 ETag
+  // 发布新通知后 ETag 必须变化，否则同学会一直看到旧列表
+  const fresh={title:'ETag 校验通知',body:'发布后列表必须失效',category:'事务',location:'',audience:'',event_at:null,deadline_at:null,pinned:false};
+  const created=await call('/admin/notices','POST',fresh);assert.equal(created.status,201);
+  const afterPublish=await revalidate('/notices');
+  assert.notEqual(afterPublish.tag,feed.tag);
+  assert.equal(afterPublish.cached,304);
+  // 编辑、归档、导入待审同样要让缓存失效
+  const {id:freshId}=await created.json();
+  await call('/admin/notices/'+freshId,'PUT',{...fresh,title:'改过标题',version:1});
+  const afterEdit=await revalidate('/notices');assert.notEqual(afterEdit.tag,afterPublish.tag);
+  await call('/admin/notices/'+freshId+'/archive','POST',{version:2});
+  const afterArchive=await revalidate('/notices');assert.notEqual(afterArchive.tag,afterEdit.tag);
+  const draft=await(await call('/admin/parse','POST',{text:'周五下午三点开班会，请准时到场。',referenceDate:'2026-09-09T10:00:00+08:00'})).json();
+  await call('/admin/import','POST',{drafts:draft.drafts,source:'text'});
+  const afterImport=await revalidate('/admin/notices');assert.notEqual(afterImport.tag,adminFeed.tag);
+  // 拿着别人的 ETag 不能骗到 304
+  etagHeader='"999999-0000000000000000"';
+  assert.equal((await call('/notices')).status,200);
+  etagHeader=null;
   cookie=committeeCookie;
   assert.equal((await call('/logout','POST',{})).status,200);assert.equal((await call('/admin/notices')).status,401);
   assert.equal((await call('/admin/parse','POST',{text:'作业明天交',referenceDate:'2026-09-09T10:00:00+08:00'})).status,401);
   for(let i=0;i<8;i++)assert.equal((await call('/login','POST',{student_id:'unknown',name:'未知',password:secret})).status,401);
   assert.equal((await call('/login','POST',{student_id:'unknown',name:'未知',password:secret})).status,429);
-  console.log('PASS: 姓名学号登录、首次改密、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档。');
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效。');
 }finally{await mf.dispose();}

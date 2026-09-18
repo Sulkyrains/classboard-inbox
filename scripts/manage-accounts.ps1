@@ -1,17 +1,28 @@
-param([string]$Roster,[string]$Committee,[string]$Reset,[switch]$Remote)
+param([string]$Roster,[string]$Committee,[string]$Reset,[switch]$Reissue,[switch]$Status,[switch]$Remote)
 $ErrorActionPreference='Stop'
-if (!$Reset -and (!$Roster -or !$Committee)) { throw 'Provide Roster and Committee, or Reset student number' }
-$secret = Read-Host 'Enter temporary password (hidden)' -AsSecureString
-$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
-try {
-  $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-  $taskArgs = @('scripts/accounts.mjs')
-  if ($Reset) { $taskArgs += @('--reset',$Reset) } else { $taskArgs += @('--roster',$Roster,'--committee',$Committee) }
-  if ($Remote) { $taskArgs += '--remote' }
-  $plain | & node @taskArgs
-  if ($LASTEXITCODE -ne 0) { throw 'Account operation failed' }
-} finally {
-  $plain=$null
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-  $secret.Dispose()
+if (!$Status -and !$Reissue -and !$Reset -and (!$Roster -or !$Committee)) { throw 'Provide Roster and Committee, or Reset student number, or Reissue, or Status' }
+
+$taskArgs = @('scripts/accounts.mjs')
+if ($Status) { $taskArgs += '--status' }
+elseif ($Reissue) { $taskArgs += '--reissue' }
+elseif ($Reset) { $taskArgs += @('--reset',$Reset) }
+else { $taskArgs += @('--roster',$Roster,'--committee',$Committee) }
+if ($Remote) { $taskArgs += '--remote' }
+
+if ($Reset) {
+  # Leave the prompt empty to let the tool generate a random temporary password.
+  $secret = Read-Host 'Temporary password (leave empty to auto-generate, hidden)' -AsSecureString
+  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
+  try {
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    $plain | & node @taskArgs
+  } finally {
+    $plain=$null
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    $secret.Dispose()
+  }
+} else {
+  # Roster import issues a distinct random password per student; nothing to type in.
+  & node @taskArgs
 }
+if ($LASTEXITCODE -ne 0) { throw 'Account operation failed' }

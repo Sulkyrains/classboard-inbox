@@ -50,7 +50,9 @@ npm run dev
 
 ### 创建班级账号
 
-新版使用姓名、学号、密码登录，角色为 committee / student。首次登录必须先修改密码，新密码至少 6 位。旧 admins 记录保留但不再参与登录；没有公开注册入口。
+新版使用姓名、学号、密码登录，角色为 committee / student。首次登录必须先修改密码，新密码至少 6 位，且不能是学号、连续或重复数字以及常见弱口令。旧 admins 记录保留但不再参与登录；没有公开注册入口。
+
+**每人一份独立的随机初始密码。** 姓名和学号在班里是公开信息，如果全班共用一个初始密码，任何知道它的人都能抢在本人之前登录任意账号（包括班委账号）并改掉密码。导入工具因此为每个人单独生成一个 10 位随机密码（去掉 `0/O/1/l/I` 等易混字符），写入 `work/initial-passwords.csv`（权限 0600，`work/` 已被 Git 忽略），控制台只打印统计数字。**请逐人当面或私聊发放，发完删除该文件；不要发到群里。**
 
 先执行数据库迁移，然后在 Git 忽略目录 `work/` 准备 JSON 数组，每项包含 `name` 和字符串类型的 `student_id`。本次 29 人、两列无标题的原始 Excel 可用以下脚本提取（其他格式请先整理为 JSON）：
 
@@ -58,20 +60,34 @@ npm run dev
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/read-roster.ps1 -Workbook "你的名单.xlsx"
 ```
 
-运行 `node scripts/accounts.mjs --roster work/roster.json --committee "班委姓名"`，线上加 `--remote`。初始密码通过标准输入提供，不放进命令参数或 Git；推荐使用下面的交互式本机工具，它使用隐藏输入并通过进程管道传递：
+运行 `node scripts/accounts.mjs --roster work/roster.json --committee "班委姓名"`，线上加 `--remote`。批量导入不需要输入任何密码；推荐使用下面的本机工具：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-accounts.ps1 -Roster work/roster.json -Committee "班委姓名"
-# 线上加 -Remote；重置单个账号改用 -Reset "学号" -Remote
+# 线上加 -Remote
+# 重置单个账号：-Reset "学号" -Remote（提示符留空则自动生成随机临时密码并打印）
+# 查看激活进度：-Status -Remote
 ```
 
-导入校验空字段、重复学号、班委唯一性及现有账号姓名/角色冲突；重复执行跳过已有账号，不覆盖密码。每人使用独立随机盐和 PBKDF2-SHA256 摘要。临时 SQL 自动删除；名单、派生值不进入 Git 或静态资源。
+未激活（`must_change_password=1`）的账号，其初始密码仍然有效，是整套系统里唯一还能被冒用的窗口。用 `-Status` 随时查看谁还没登录改密，并优先让班委账号第一个激活：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-accounts.ps1 -Status -Remote
+```
+
+**从旧的共享初始密码迁移。** 早期版本给全班发的是同一个初始密码。`-Reissue` 会给所有还没激活的账号各换一份新的独立随机密码、撤销其现有会话，并写出同一份 `work/initial-passwords.csv`；已经自己改过密码的账号不受影响。导入流程只新建缺失的账号、不会覆盖已有账号的密码，所以旧账号必须走这一步：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-accounts.ps1 -Reissue -Remote
+```
+
+导入校验空字段、重复学号、班委唯一性及现有账号姓名/角色冲突；重复执行跳过已有账号，不覆盖密码。每人使用独立随机密码、独立随机盐和 PBKDF2-SHA256 摘要。临时 SQL 自动删除；名单、密码与派生值不进入 Git 或静态资源。
 
 ### 忘记密码
 
-维护者使用上述本机工具的 `-Reset "学号"` 参数，输入临时密码。工具撤销此人的所有会话并重新要求首次改密。无需删除重建账号，个人已读记录保留。旧 `admin:setup` 流程已停用。
+维护者使用上述本机工具的 `-Reset "学号"` 参数。密码提示符留空即自动生成一个随机临时密码并打印出来（也可自己输入 8—256 位）。工具撤销此人的所有会话并重新要求首次改密。无需删除重建账号，个人已读记录保留。旧 `admin:setup` 流程已停用。
 
-会话 Cookie 使用 HttpOnly、SameSite=Strict 和 HTTPS Secure，有效期 8 小时。登录及修改密码失败会限速。首次改密后为当前设备签发新会话并直接进入看板；之后在个人设置中改密仍要求重新登录，其他旧会话均失效。
+会话 Cookie 使用 HttpOnly、SameSite=Strict 和 HTTPS Secure，有效期 30 天——安卓 App 要靠这个会话在后台轮询新通知，会话太短会让提醒停掉。登录、修改密码与测试推送失败会限速。退出登录或修改密码时会一并清除离线缓存，避免共用设备上被下一个人离线读到。首次改密后为当前设备签发新会话并直接进入看板；之后在个人设置中改密仍要求重新登录，其他旧会话均失效。
 
 ## 使用群消息解析
 
@@ -159,9 +175,25 @@ node scripts/seed.mjs --remote
 
 `scripts/package-connector.mjs` 另提供 API 直接上传打包形式，供有 Cloudflare API 连接的环境使用。该变体把应用小文件嵌入 Worker，OCR 引擎通过固定版本 CDN 路径代理；全部请求会计入 Functions 额度。它不参与常规 `npm run deploy`，日常维护优先用上面的标准静态部署方式。
 
-### 免费额度
+### 免费额度与通知列表缓存
 
-Pages 静态请求、Functions 与 D1 的免费额度按 Cloudflare 当前账户计划执行，不代表无限用量。参考 [Pages 计费](https://developers.cloudflare.com/pages/functions/pricing/) 和 [D1 计费](https://developers.cloudflare.com/d1/platform/pricing/)。按班级规模起步，无需购买服务器；大规模使用前检查用量。
+Pages 静态请求、Functions 与 D1 的免费额度按 Cloudflare 当前账户计划执行，不代表无限用量。参考 [Pages 计费](https://developers.cloudflare.com/pages/functions/pricing/) 和 [D1 计费](https://developers.cloudflare.com/d1/platform/pricing/)。
+
+**D1 按查询扫描的行数计费**，而前端每 30 秒轮询一次通知列表，安卓 App 另有每 15 分钟一次的后台轮询。早期实现每次轮询都要扫过整张 `notices` 表，行读取量随「人数 × 在线时长 × 通知条数」线性增长，很快会顶到免费额度的 500 万行/天。
+
+现在 `/api/notices` 与 `/api/admin/notices` 走 ETag 校验：`notice_feed` 表里存一个版本号，通知有任何增删改时在同一个事务里 +1；请求先读这一行算出 ETag，与 `If-None-Match` 一致就直接回 304，不再查通知表。浏览器自动完成整个校验流程，前端代码无需改动。响应头用 `private, no-cache`——`no-cache` 表示每次都回来校验，所以新通知不会延迟；`private` 保证 CDN 和中间代理不留副本。
+
+实测（库中 300 条已发布、800 条总计）：
+
+| 接口 | 改前 | 改后 |
+|---|---:|---:|
+| `/api/notices` | 300 行 | 1 行 |
+| `/api/admin/notices`（补 `created_at` 索引前） | 1600 行 | 1 行 |
+| `/api/admin/notices`（补索引后，缓存未命中时） | 500 行 | — |
+
+29 人日均 2 小时的场景下，行读取量从约 306 万/天（免费额度的 61%）降到约 3 万/天（0.6%）；即便扩到 200 人也只占 4%。
+
+**部署顺序：先跑迁移，再部署 Worker。** 迁移未执行时读取端会自动退回不做缓存校验（不会 500），但发布通知的事务里包含版本号自增，缺表会导致发布失败。
 
 ## 测试与验收
 

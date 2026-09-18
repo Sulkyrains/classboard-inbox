@@ -10,6 +10,35 @@ function fail(status: number, message: string): never { throw new HttpError(stat
 /** 登录状态保留 30 天：App 需要长期保持登录才能在后台收到提醒。 */
 const SESSION_MS=30*24*60*60*1000;
 const SESSION_SECONDS=SESSION_MS/1000;
+/** 登录、改密和测试推送共用同一张限流表：命中同一个桶的请求 15 分钟内累加。 */
+const ATTEMPT_SQL='INSERT INTO login_attempts(bucket,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN expires_at<? THEN 1 ELSE attempts+1 END,expires_at=CASE WHEN expires_at<? THEN excluded.expires_at ELSE expires_at END RETURNING attempts';
+const attempt=(db: D1Database, bucket: string, now: number)=>db.prepare(ATTEMPT_SQL).bind(bucket,now+900000,now,now);
+/** 只接受真实推送服务：否则同学能让 Worker 向任意地址群发，也能刷满订阅表挤掉别人。 */
+const PUSH_HOSTS=['fcm.googleapis.com','android.googleapis.com','push.apple.com','notify.windows.com','push.services.mozilla.com'];
+const pushHostAllowed=(host: string)=>PUSH_HOSTS.some(d=>host===d||host.endsWith('.'+d));
+const PUSH_PER_USER=5;
+/** 挡掉同班同学最容易猜中的几类口令；长度和重复性检查在调用处完成。 */
+const WEAK_PASSWORDS=new Set(['123456','1234567','12345678','123456789','1234567890','111111','000000','666666','888888','abc123','abcdef','abcd1234','password','passw0rd','qwerty','qwerty123','asdfgh','zxcvbnm','iloveyou','woaini','woaini1314','5201314','a123456','123123','123321','112233','11223344']);
+function weakPassword(value: string, studentId: string) {
+  const lower=value.toLowerCase();
+  if(WEAK_PASSWORDS.has(lower))return true;
+  if(studentId&&lower.includes(studentId.toLowerCase()))return true;
+  if(new Set(value).size===1)return true;
+  return /^\d+$/.test(value)&&[...value].every((c,i,a)=>!i||Math.abs(+c-+a[i-1])===1);
+}
+/** 通知列表的缓存标记：读一行版本号就能判断内容有没有变，省掉整表扫描。 */
+const bumpFeed=(db: D1Database)=>db.prepare('UPDATE notice_feed SET version=version+1 WHERE id=1');
+async function feedTag(db: D1Database, ...scope: (string|null)[]): Promise<string|null> {
+  // 迁移还没跑时退回“不做缓存校验”，而不是让整站 500：宁可多扫几次表，也不能打不开。
+  const row=await db.prepare('SELECT version FROM notice_feed WHERE id=1').first<{version:number}>().catch(()=>null);
+  if(!row)return null;
+  return `"${row.version}-${(await sha256(JSON.stringify(scope))).slice(0,16)}"`;
+}
+const feedHeaders=(etag: string|null): Record<string,string> => etag?{ETag:etag,'Cache-Control':FEED_CACHE}:{};
+// private：只允许浏览器自己缓存，不让 CDN 或中间代理留副本；no-cache：每次都回来校验 ETag，所以通知不会延迟。
+const FEED_CACHE='private, no-cache';
+/** 命中缓存时不带正文返回，客户端直接复用上一次的列表。 */
+const notModified=(etag: string) => new Response(null,{status:304,headers:{ETag:etag,'Cache-Control':FEED_CACHE,'X-Content-Type-Options':'nosniff'}});
 const json = (body: unknown, status=200, headers: Record<string,string>={}) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 
 async function readBody(request: Request): Promise<Record<string,unknown>> {
@@ -18,7 +47,8 @@ async function readBody(request: Request): Promise<Record<string,unknown>> {
   const chunks: Uint8Array[]=[]; let size=0;
   for(;;){const {value,done}=await reader.read(); if(done)break; size+=value.byteLength; if(size>100000){await reader.cancel();fail(413,'内容过长，请分批导入');} chunks.push(value);}
   const all=new Uint8Array(size);let offset=0;for(const c of chunks){all.set(c,offset);offset+=c.byteLength;}
-  try { const value=JSON.parse(new TextDecoder().decode(all)); if(!value||Array.isArray(value)||typeof value!=='object')fail(400,'格式错误'); return value; } catch{ return fail(400,'内容格式不正确'); }
+  const text=new TextDecoder().decode(all); if(!text.trim()) return {};   // 空请求体等同于 {}：标记已读等接口不带正文
+  try { const value=JSON.parse(text); if(!value||Array.isArray(value)||typeof value!=='object')fail(400,'格式错误'); return value; } catch{ return fail(400,'内容格式不正确'); }
 }
 function requireOrigin(request: Request) {
   const origin=request.headers.get('Origin'); const url=new URL(request.url);
@@ -62,7 +92,7 @@ function pushAvailable(env: Env) { return !!loadVapid(env.VAPID_PUBLIC_KEY,env.V
 async function fanOutPush(env: Env, notice:{id:string;title:string;category:string;body:string}) {
   const keys=loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY); if(!keys)return;
   const subject=env.VAPID_SUBJECT||'mailto:classboard-inbox@users.noreply.example';
-  const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions LIMIT 1000').all<{endpoint:string;p256dh:string;auth:string}>();
+  const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions ORDER BY created_at LIMIT 1000').all<{endpoint:string;p256dh:string;auth:string}>();
   const payload=pushPayload(notice),stale:string[]=[];
   await Promise.allSettled(subs.results.map(async sub=>{const ok=await sendPush(sub,payload,keys,subject).catch(()=>true);if(!ok)stale.push(sub.endpoint);}));
   if(stale.length)await env.DB.batch(stale.map(endpoint=>env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').bind(endpoint)));
@@ -99,7 +129,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const user=await env.DB.prepare('SELECT id FROM users WHERE calendar_token=?').bind(token).first<{id:string}>();
     if(!user)return json({error:'无效的订阅链接'},404);
     const result=await env.DB.prepare("SELECT * FROM notices WHERE status='published' AND (event_at IS NOT NULL OR deadline_at IS NOT NULL) ORDER BY published_at DESC LIMIT 500").all();
-    return new Response(buildCalendar(result.results,url.origin),{headers:{'Content-Type':'text/calendar; charset=utf-8','Cache-Control':'no-store'}});
+    return new Response(buildCalendar(result.results,url.origin),{headers:{'Content-Type':'text/calendar; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
   }
   if(path==='/api/session'&&method==='GET')return json({user:await session(request,env.DB)});
   if(path==='/api/login'&&method==='POST'){
@@ -111,8 +141,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const now=Date.now();
     const bucket=await sha256(`${request.headers.get('CF-Connecting-IP')||'local'}:${username}`);
     const ipBucket=await sha256(`ip:${request.headers.get('CF-Connecting-IP')||'local'}`);
-    const countSql='INSERT INTO login_attempts(bucket,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN expires_at<? THEN 1 ELSE attempts+1 END,expires_at=CASE WHEN expires_at<? THEN excluded.expires_at ELSE expires_at END RETURNING attempts';
-    const counters=await env.DB.batch<{attempts:number}>([env.DB.prepare(countSql).bind(bucket,now+900000,now,now),env.DB.prepare(countSql).bind(ipBucket,now+900000,now,now)]);
+    const counters=await env.DB.batch<{attempts:number}>([attempt(env.DB,bucket,now),attempt(env.DB,ipBucket,now)]);
     if(Number(counters[0].results[0]?.attempts)>8||Number(counters[1].results[0]?.attempts)>200)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const row=await env.DB.prepare('SELECT * FROM users WHERE student_id=?').bind(username).first<Admin & {salt:string;digest:string}>();
     const digest=await derive(secret,row?.salt||'unregistered-account');
@@ -134,11 +163,12 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   const user=await session(request,env.DB); if(!user)fail(401,'请先登录');
   if(path==='/api/account/password'&&method==='POST'){
     const now=Date.now(),bucket=await sha256('change:'+user.id);
-    const attempt=await env.DB.prepare('INSERT INTO login_attempts(bucket,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=CASE WHEN expires_at<? THEN 1 ELSE attempts+1 END,expires_at=CASE WHEN expires_at<? THEN excluded.expires_at ELSE expires_at END RETURNING attempts').bind(bucket,now+900000,now,now).first<{attempts:number}>();
-    if(attempt&&attempt.attempts>8)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
+    const tries=await attempt(env.DB,bucket,now).first<{attempts:number}>();
+    if(tries&&tries.attempts>8)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const body=await readBody(request);
     const current=body.current_password, next=body.new_password;
     if(typeof current!=='string'||current.length>256||typeof next!=='string'||next.length<6||next.length>256||!next.trim()||next===current)fail(400,'新密码须为 6—256 位，且不能与原密码相同');
+    if(weakPassword(next,user.student_id))fail(400,'新密码过于简单，请不要使用学号、连续或重复的数字，以及常见密码');
     const row=await env.DB.prepare('SELECT salt,digest FROM users WHERE id=?').bind(user.id).first<{salt:string;digest:string}>();
     if(!row||!equal(await derive(current,row.salt),row.digest))fail(400,'当前密码不正确');
     const salt=crypto.randomUUID(), digest=await derive(next,salt);
@@ -168,6 +198,9 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const endpoint=field(body.endpoint,'推送地址',1000,true);
     let target:URL;try{target=new URL(endpoint)}catch{return fail(400,'推送地址格式不正确');}
     if(target.protocol!=='https:')fail(400,'推送地址必须为 HTTPS');
+    if(!pushHostAllowed(target.hostname))fail(400,'推送地址不是受支持的推送服务');
+    const bound=await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id=? AND endpoint<>?').bind(user.id,endpoint).first<{n:number}>();
+    if((bound?.n||0)>=PUSH_PER_USER)fail(400,`最多绑定 ${PUSH_PER_USER} 台设备，请先在不再使用的设备上关闭推送`);
     const keys=body.keys;
     if(!keys||typeof keys!=='object')fail(400,'缺少推送密钥');
     const p256dh=field((keys as Record<string,unknown>).p256dh,'推送公钥',200,true),auth=field((keys as Record<string,unknown>).auth,'推送密钥',200,true);
@@ -183,6 +216,8 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   if(path==='/api/account/push/test'&&method==='POST'){
     const keys=loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY);
     if(!keys)return json({error:'推送服务尚未配置'},503);
+    const tries=await attempt(env.DB,await sha256('push-test:'+user.id),Date.now()).first<{attempts:number}>();
+    if(tries&&tries.attempts>5)return json({error:'测试推送太频繁，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=?').bind(user.id).all<{endpoint:string;p256dh:string;auth:string}>();
     if(!subs.results.length)return json({error:'尚未在本设备开启推送'},400);
     const subject=env.VAPID_SUBJECT||'mailto:classboard-inbox@users.noreply.example';
@@ -193,12 +228,13 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     return json({ok:true,delivered:subs.results.length-stale.length});
   }
   if(path==='/api/account/calendar-token'&&method==='POST'){
-    let token=await env.DB.prepare('SELECT calendar_token AS t FROM users WHERE id=?').bind(user.id).first<{t:string|null}>();
+    const rotate=(await readBody(request)).rotate===true;
+    let token=rotate?null:await env.DB.prepare('SELECT calendar_token AS t FROM users WHERE id=?').bind(user.id).first<{t:string|null}>();
     if(!token?.t){
       token={t:Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('')};
       await env.DB.prepare('UPDATE users SET calendar_token=? WHERE id=?').bind(token.t,user.id).run();
     }
-    return json({token:token.t,url:`${url.origin}/api/calendar?token=${token.t}`});
+    return json({token:token.t,url:`${url.origin}/api/calendar?token=${token.t}`,rotated:rotate});
   }
   if(path==='/api/account/reads'&&method==='GET'){
     const rows=await env.DB.prepare('SELECT notice_id,state FROM notice_reads WHERE user_id=?').bind(user.id).all<{notice_id:string,state:string}>();
@@ -209,8 +245,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const notice=await env.DB.prepare("SELECT id FROM notices WHERE id=? AND status='published'").bind(readPath[1]).first();
     if(!notice)fail(404,'通知不存在或尚未发布');
     if(method==='PUT'){
-      const body=await request.json().catch(()=>({})) as {state?:string};
-      const state=body.state==='done'?'done':'read';
+      const state=(await readBody(request)).state==='done'?'done':'read';
       await env.DB.batch([
         env.DB.prepare('INSERT OR IGNORE INTO notice_reads(user_id,notice_id) VALUES(?,?)').bind(user.id,readPath[1]),
         env.DB.prepare('UPDATE notice_reads SET state=? WHERE user_id=? AND notice_id=?').bind(state,user.id,readPath[1])
@@ -219,12 +254,14 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     return json({ok:true});
   }
   if(path==='/api/notices'&&method==='GET'){
-    const clauses=["status='published'"],args: string[]=[];
     const category=url.searchParams.get('category'),q=url.searchParams.get('q');
+    const etag=await feedTag(env.DB,'public',category,q);
+    if(etag&&request.headers.get('If-None-Match')===etag)return notModified(etag);
+    const clauses=["status='published'"],args: string[]=[];
     if(category&&categories.includes(category as any)){clauses.push('category=?');args.push(category);}
     if(q){clauses.push('(title LIKE ? OR body LIKE ?)');args.push(`%${q.slice(0,100)}%`,`%${q.slice(0,100)}%`);}
     const result=await env.DB.prepare(`SELECT * FROM notices WHERE ${clauses.join(' AND ')} ORDER BY pinned DESC,published_at DESC LIMIT 500`).bind(...args).all();
-    return json({notices:result.results.map(r=>mapNotice(r))});
+    return json({notices:result.results.map(r=>mapNotice(r))},200,feedHeaders(etag));
   }
   const publicDetail=path.match(/^\/api\/notices\/([\w-]+)$/);
   if(publicDetail&&method==='GET'){
@@ -253,18 +290,22 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
       statements.push(env.DB.prepare("INSERT OR IGNORE INTO notices(id,title,body,category,location,audience,event_at,deadline_at,pinned,status,source,source_text,source_hash,warnings,author_id,author_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,?,?,?)").bind(id,n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,body.source,sourceText,hash,JSON.stringify(warnings),admin.id,admin.display_name,now,now));
       statements.push(env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=?').bind(crypto.randomUUID(),admin.display_name,'导入待审核',now,id));
     }
-    const results=await env.DB.batch(statements);const imported=results.filter((_,i)=>i%2===0).reduce((sum,r)=>sum+(r.meta.changes||0),0);
+    statements.push(bumpFeed(env.DB));
+    const results=await env.DB.batch(statements);const imported=results.slice(0,-1).filter((_,i)=>i%2===0).reduce((sum,r)=>sum+(r.meta.changes||0),0);
     return json({imported,skipped:body.drafts.length-imported},201);
   }
   if(path==='/api/admin/notices'&&method==='GET'){
+    const etag=await feedTag(env.DB,'admin');
+    if(etag&&request.headers.get('If-None-Match')===etag)return notModified(etag);
     const result=await env.DB.prepare('SELECT * FROM notices ORDER BY created_at DESC LIMIT 500').all();
-    return json({notices:result.results.map(r=>mapNotice(r,true))});
+    return json({notices:result.results.map(r=>mapNotice(r,true))},200,feedHeaders(etag));
   }
   if(path==='/api/admin/notices'&&method==='POST'){
     const body=await readBody(request),n=validate(body),id=crypto.randomUUID(),now=new Date().toISOString();
     await env.DB.batch([
       env.DB.prepare("INSERT INTO notices(id,title,body,category,location,audience,event_at,deadline_at,pinned,status,author_id,author_name,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,'published',?,?,?,?,?)").bind(id,n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,admin.id,admin.display_name,now,now,now),
-      env.DB.prepare('INSERT INTO audit_log VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),id,admin.display_name,'发布',now)
+      env.DB.prepare('INSERT INTO audit_log VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),id,admin.display_name,'发布',now),
+      bumpFeed(env.DB)
     ]);
     deferPush(ctx,env,{id,title:n.title,category:n.category,body:n.body});
     return json({id},201);
@@ -275,7 +316,8 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
     const result=await env.DB.batch([
       env.DB.prepare("UPDATE notices SET title=?,body=?,category=?,location=?,audience=?,event_at=?,deadline_at=?,pinned=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND status IN ('pending','published')").bind(n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,now,edit[1],body.version as number),
-      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,'编辑',now,edit[1],Number(body.version)+1,now)
+      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,'编辑',now,edit[1],Number(body.version)+1,now),
+      bumpFeed(env.DB)
     ]);
     if(!result[0].meta.changes)fail(409,'通知已被更新或已归档，请刷新后重试');
     return json({ok:true});
@@ -289,7 +331,8 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const label=action[2]==='publish'?'审核通过':action[2]==='reject'?'驳回':'归档';
     const results=await env.DB.batch([
       env.DB.prepare('UPDATE notices SET status=?,reviewed_by=?,reviewed_at=?,published_at=CASE WHEN ?=\'published\' THEN ? ELSE published_at END,updated_at=?,version=version+1 WHERE id=? AND version=? AND status=?').bind(status,admin.id,now,status,now,now,action[1],body.version as number,old),
-      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,label,now,action[1],Number(body.version)+1,now)
+      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,label,now,action[1],Number(body.version)+1,now),
+      bumpFeed(env.DB)
     ]);
     if(!results[0].meta.changes)fail(409,'通知状态已变化，请刷新后重试');
     if(action[2]==='publish'){
