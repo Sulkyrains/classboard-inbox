@@ -29,9 +29,9 @@ import java.util.List;
 
 /** 通知与后台轮询：不依赖 GMS，用系统 JobScheduler + 直连班级 API。 */
 public final class Notifier {
-    static final String SITE = "https://classboard-inbox.pages.dev/";
-    static final String API_NOTICES = "https://classboard-inbox.pages.dev/api/notices";
-    static final String API_VERSION = "https://classboard-inbox.pages.dev/app-version.json";
+    static final String SITE = "https://classboard-upc.pages.dev/";
+    static final String API_NOTICES = "https://classboard-upc.pages.dev/api/notices";
+    static final String API_VERSION = "https://classboard-upc.pages.dev/app-version.json";
     static final String CHANNEL = "classboard-notices";
     static final String UA = "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + ") AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36 ClassboardApp/" + BuildConfig.VERSION_NAME;
     private static final String PREFS = "classboard";

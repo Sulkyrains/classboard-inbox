@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">知会</string>
+    <string name="app_name">知可而办</string>
     <string name="channel_name">班级通知</string>
     <string name="channel_desc">班委发布新通知时提醒</string>
 </resources>

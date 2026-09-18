@@ -91,7 +91,7 @@ function pushPayload(notice:{id:string;title:string;category:string;body:string}
 function pushAvailable(env: Env) { return !!loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY); }
 async function fanOutPush(env: Env, notice:{id:string;title:string;category:string;body:string}) {
   const keys=loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY); if(!keys)return;
-  const subject=env.VAPID_SUBJECT||'mailto:classboard-inbox@users.noreply.example';
+  const subject=env.VAPID_SUBJECT||'mailto:classboard-upc@users.noreply.example';
   const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions ORDER BY created_at LIMIT 1000').all<{endpoint:string;p256dh:string;auth:string}>();
   const payload=pushPayload(notice),stale:string[]=[];
   await Promise.allSettled(subs.results.map(async sub=>{const ok=await sendPush(sub,payload,keys,subject).catch(()=>true);if(!ok)stale.push(sub.endpoint);}));
@@ -104,7 +104,7 @@ function deferPush(ctx: ExecutionContext|undefined, env: Env, notice:{id:string;
 function icsEscape(value:string){return value.replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');}
 function icsTime(iso:string){return new Date(iso).toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');}
 function buildCalendar(notices:Record<string,unknown>[],origin:string):string {
-  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//classboard-inbox//CN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:知会 · 班级日程','X-WR-TIMEZONE:Asia/Shanghai'];
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//classboard-upc//CN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:知可而办 · 班级日程','X-WR-TIMEZONE:Asia/Shanghai'];
   for(const n of notices){
     for(const [kind,date] of [['event_at',n.event_at],['deadline_at',n.deadline_at]] as const){
       if(typeof date!=='string')continue;
@@ -220,8 +220,8 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(tries&&tries.attempts>5)return json({error:'测试推送太频繁，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=?').bind(user.id).all<{endpoint:string;p256dh:string;auth:string}>();
     if(!subs.results.length)return json({error:'尚未在本设备开启推送'},400);
-    const subject=env.VAPID_SUBJECT||'mailto:classboard-inbox@users.noreply.example';
-    const payload: PushPayload={title:'知会 · 测试推送',body:'绑定成功，新的班级通知会第一时间推送到这里。',url:'/',tag:'push-test'};
+    const subject=env.VAPID_SUBJECT||'mailto:classboard-upc@users.noreply.example';
+    const payload: PushPayload={title:'知可而办 · 测试推送',body:'绑定成功，新的班级通知会第一时间推送到这里。',url:'/',tag:'push-test'};
     const stale:string[]=[];
     await Promise.allSettled(subs.results.map(async sub=>{const ok=await sendPush(sub,payload,keys,subject).catch(()=>true);if(!ok)stale.push(sub.endpoint);}));
     if(stale.length)await env.DB.batch(stale.map(endpoint=>env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').bind(endpoint)));

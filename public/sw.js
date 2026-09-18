@@ -53,7 +53,7 @@ self.addEventListener('push',event=>{
   event.waitUntil((async()=>{
     let data={};
     if(event.data){try{data=event.data.json();}catch{data={body:event.data.text()};}}
-    await self.registration.showNotification(data.title||'知会 · 班级通知',{
+    await self.registration.showNotification(data.title||'知可而办 · 班级通知',{
       body:data.body||'有新的班级通知，点击查看。',
       icon:'/icons/app-192.png',badge:'/icons/app-192.png',
       tag:data.tag||'classboard',renotify:true,

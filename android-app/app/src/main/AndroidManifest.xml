@@ -40,7 +40,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="classboard-inbox.pages.dev" />
+                    android:host="classboard-upc.pages.dev" />
             </intent-filter>
         </activity>
 

@@ -231,7 +231,7 @@ final class Updater {
                     ? new Notification.Builder(context, Notifier.CHANNEL)
                     : new Notification.Builder(context);
             builder.setSmallIcon(R.drawable.ic_stat_bell)
-                    .setContentTitle("知会 " + versionName + " 已下载")
+                    .setContentTitle("知可而办 " + versionName + " 已下载")
                     .setContentText("点按完成安装，登录状态会保留。")
                     .setStyle(new Notification.BigTextStyle().bigText("新版本已自动下载完成，点按这条通知即可安装，安装后登录状态自动保留。"))
                     .setColor(0xFF285BE8)

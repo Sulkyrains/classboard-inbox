@@ -1,6 +1,6 @@
-# 知会 · 班级通知看板
+# 知可而办 · 班级通知看板
 
-线上网站：[https://classboard-inbox.pages.dev](https://classboard-inbox.pages.dev/)。2026-09-13 已上线账号升级，连接 Cloudflare Pages 和远程 D1，提供 6 条示例通知。全站通知须登录并完成首次改密后才能查看。
+线上网站：[https://classboard-upc.pages.dev](https://classboard-upc.pages.dev/)。2026-09-13 已上线账号升级，连接 Cloudflare Pages 和远程 D1，提供 6 条示例通知。全站通知须登录并完成首次改密后才能查看。
 
 交付验证：21 条解析/OCR 单元测试、构建和接口集成测试通过；本地浏览器确认首次改密门禁和个人设置入口，线上班委及同学登录、角色与首次改密门禁通过。可运行 `node scripts/verify-live.mjs` 复查线上匿名访问隔离。OCR 实际样例识别在上一版本验收，本次识别逻辑未更改。可选 LLM 未配置真实服务，默认使用规则解析；班委登录后从“群消息导入”进入草稿与审核流程。
 
@@ -141,7 +141,7 @@ Tesseract.js 7 与 WASM 在构建时复制至站点；语言模型首次使用�
 
 ## Cloudflare Pages 部署
 
-D1 数据库与 Pages 项目均使用 `classboard-inbox`。配置中现有数据库 ID 对应本次创建的数据库；部署到其他账户时，应替换为自己创建的 D1 ID，不要沿用。
+D1 数据库仍叫 `classboard-inbox`，Pages 项目名为 `classboard-upc`（网站域名 classboard-upc.pages.dev，2026-09 由 classboard-inbox 更名；旧 Pages 项目保留过渡）。配置中现有数据库 ID 对应本次创建的数据库；部署到其他账户时，应替换为自己创建的 D1 ID，不要沿用。
 
 首次使用 Wrangler 时，由维护者自行在浏览器完成官方登录授权：
 
@@ -153,7 +153,7 @@ npx wrangler login
 
 ```sh
 npx wrangler d1 create classboard-inbox
-npx wrangler pages project create classboard-inbox --production-branch main
+npx wrangler pages project create classboard-upc --production-branch main
 ```
 
 将创建结果中的数据库 ID 写入 `wrangler.jsonc` 后：
@@ -251,10 +251,10 @@ scripts/                   构建、种子数据、账号初始化与验证
 
 ## 手机应用（PWA）
 
-访问 [知会](https://classboard-inbox.pages.dev/)，在登录页或个人账号窗口点击「添加到手机桌面」。支持安装的浏览器会弹出安装提示，其余浏览器会显示安装步骤。
+访问 [知可而办](https://classboard-upc.pages.dev/)，在登录页或个人账号窗口点击「添加到手机桌面」。支持安装的浏览器会弹出安装提示，其余浏览器会显示安装步骤。
 
 - 安卓：使用 Chrome 或 Edge，浏览器菜单 →「安装应用」或「添加到主屏幕」。
-- iPhone：使用 Safari，分享 →「添加到主屏幕」，之后从桌面「知会」图标打开。
+- iPhone：使用 Safari，分享 →「添加到主屏幕」，之后从桌面「知可而办」图标打开。
 - 安装后以独立窗口运行，沿用网站的姓名、学号和密码；首次改密后直接进入看板。不同浏览器与桌面应用可能需要各自登录。
 - 联网重新打开时获取最新网页；已打开的应用检测到新版本后显示「刷新更新」，用户保存草稿后再刷新。无需重新下载安装包。
 - 通知始终从服务器读取，Service Worker 只缓存通用离线提示页，不缓存账号、通知或导入原文；离线时提示重新连接。
@@ -305,7 +305,7 @@ scripts/                   构建、种子数据、账号初始化与验证
 
 - 网站「个人账号」弹窗和登录页内置分平台安装指引：微信/QQ 内置浏览器会提示「用系统浏览器打开」；iPhone Safari 按步骤「分享 → 添加到主屏幕」；安卓 Chrome 收推送无需安装，安装桌面图标走菜单「安装应用」。
 - 安卓 App（`android-app/`，原生 Activity + WebView 壳，无 AndroidX、不依赖谷歌服务）：
-  1. **直接分发**：安装包随网站发布，手机浏览器打开 `https://classboard-inbox.pages.dev/classboard.apk` 下载安装（允许「未知来源」即可）；也可把该链接/APK 文件发到班级群。
+  1. **直接分发**：安装包随网站发布，手机浏览器打开 `https://classboard-upc.pages.dev/classboard.apk` 下载安装（允许「未知来源」即可）；也可把该链接/APK 文件发到班级群。
   2. App 每约 15 分钟在后台轮询一次通知接口，有新通知即弹系统通知，因此不依赖 FCM / GMS；App 在前台时新通知立即弹出，登录状态保留 30 天。
   3. **自动更新**：启动时与后台轮询时读取 `public/app-version.json`，发现更高 `versionCode` 就自动把安装包下载到应用私有目录，校验包名、版本号、签名与当前 App 一致后，应用内弹「立即安装」或发一条「已下载」通知，点按即拉起系统安装器，全程不用浏览器；「个人账号」弹窗内也有「检查 App 更新」入口。校验不通过的安装包会被直接丢弃。
   4. **边到边留白**：Android 15 起系统强制边到边绘制，App 按系统 insets 给页面留出状态栏 / 导航栏空间，并随网页深浅色切换留白区底色与状态栏图标明暗，顶部不会再被状态栏压住。

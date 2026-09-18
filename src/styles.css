@@ -92,3 +92,9 @@
 .detail-body.markdown table{border-collapse:collapse;margin:0 0 14px;font-size:.95em}
 .detail-body.markdown th,.detail-body.markdown td{border:1px solid var(--line);padding:6px 10px}
 :root[data-theme=dark] .detail-body.markdown code,:root[data-theme=dark] .detail-body.markdown pre{background:#0f1930}
+
+/* 首页大字锁两行：每行自身不换行，字号随文字列宽收缩，系统字体放大时也不会折成四行 */
+.welcome-panel>div:first-child{flex:1 1 auto;min-width:0;container-type:inline-size}
+.welcome-panel h2 .welcome-line{display:block;white-space:nowrap}
+@supports(font-size:1cqi){.welcome-panel h2{font-size:clamp(17px,12.5cqi,26px)}}
+@media(max-width:360px){.board-art{display:none}}

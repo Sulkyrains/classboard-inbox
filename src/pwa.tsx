@@ -29,7 +29,7 @@ export function InstallApp(){
   const install=async()=>{if(!prompt){setHint(v=>!v);return;}setBusy(true);const current=prompt;prompt=null;try{await current.prompt();const choice=await current.userChoice;if(choice.outcome==='accepted')setInstalled(true);}catch{setHint(true);}finally{setBusy(false);}};
   const label=kind==='wechat'?'如何安装到桌面':kind==='ios'?'安装到 iPhone 桌面':'添加到手机桌面';
   const apk=kind==='android'||kind==='desktop';
-  return <div className="install-app">{hint&&guideFor(kind)}<button type="button" className="install-button" onClick={()=>void install()} disabled={busy}><Download size={16}/>{busy?'正在打开安装提示…':hint?'收起指引':label}</button>{apk&&<a className="install-button" href="/classboard.apk" download="知会.apk"><PackageOpen size={16}/>下载安卓 App 安装包（独立运行，无需浏览器）</a>}</div>;
+  return <div className="install-app">{hint&&guideFor(kind)}<button type="button" className="install-button" onClick={()=>void install()} disabled={busy}><Download size={16}/>{busy?'正在打开安装提示…':hint?'收起指引':label}</button>{apk&&<a className="install-button" href="/classboard.apk" download="知可而办.apk"><PackageOpen size={16}/>下载安卓 App 安装包（独立运行，无需浏览器）</a>}</div>;
 }
 export function AppUpdate(){
   const [ready,setReady]=useState(updateReady);

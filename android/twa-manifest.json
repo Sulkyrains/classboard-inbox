@@ -1,8 +1,8 @@
 {
   "packageId": "cn.classboard.inbox",
-  "host": "classboard-inbox.pages.dev",
-  "name": "知会 · 班级通知看板",
-  "launcherName": "知会",
+  "host": "classboard-upc.pages.dev",
+  "name": "知可而办 · 班级通知看板",
+  "launcherName": "知可而办",
   "display": "standalone",
   "themeColor": "#285be8",
   "themeColorDark": "#0d1526",
@@ -13,8 +13,8 @@
   "backgroundColor": "#f6f8fc",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://classboard-inbox.pages.dev/icons/app-512.png",
-  "maskableIconUrl": "https://classboard-inbox.pages.dev/icons/maskable-512.png",
+  "iconUrl": "https://classboard-upc.pages.dev/icons/app-512.png",
+  "maskableIconUrl": "https://classboard-upc.pages.dev/icons/maskable-512.png",
   "monochromeIconUrl": null,
   "splashScreenFadeOutDuration": 300,
   "signingKey": {
@@ -25,7 +25,7 @@
   "appVersionCode": 2,
   "shortcuts": [],
   "generatorApp": "Bubblewrap",
-  "webManifestUrl": "https://classboard-inbox.pages.dev/manifest.webmanifest",
+  "webManifestUrl": "https://classboard-upc.pages.dev/manifest.webmanifest",
   "fallbackType": "customtabs",
   "features": {},
   "alphaDependencies": {

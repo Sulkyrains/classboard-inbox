@@ -23,7 +23,7 @@ public class App extends Application {
 
     private void save(Throwable error) {
         try (Writer writer = new OutputStreamWriter(openFileOutput(CRASH_FILE, MODE_PRIVATE), "UTF-8")) {
-            writer.write("知会 " + BuildConfig.VERSION_NAME + " · Android " + Build.VERSION.RELEASE + " · " + Build.MODEL + "\n\n");
+            writer.write("知可而办 " + BuildConfig.VERSION_NAME + " · Android " + Build.VERSION.RELEASE + " · " + Build.MODEL + "\n\n");
             error.printStackTrace(new PrintWriter(writer));
             writer.flush();
         } catch (Throwable ignored) {

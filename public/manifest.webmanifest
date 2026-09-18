@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "知会 · 班级通知看板",
-  "short_name": "知会",
+  "name": "知可而办 · 班级通知看板",
+  "short_name": "知可而办",
   "description": "班级通知、群消息导入与日程安排",
   "lang": "zh-CN",
   "start_url": "/",

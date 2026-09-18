@@ -39,7 +39,7 @@ import java.io.InputStreamReader;
 
 public class MainActivity extends Activity {
     static final String EXTRA_INSTALL = "cn.classboard.inbox.install";
-    private static final String SITE_HOST = "classboard-inbox.pages.dev";
+    private static final String SITE_HOST = "classboard-upc.pages.dev";
     private static final String TAG = "classboard";
     private static final int BG_LIGHT = 0xFFF6F8FC;
     private static final int BG_DARK = 0xFF0D1526;
@@ -147,6 +147,8 @@ public class MainActivity extends Activity {
             WebSettings settings = webView.getSettings();
             settings.setJavaScriptEnabled(true);
             settings.setDomStorageEnabled(true);
+            // 手机系统字体放大时 WebView 会同步放大网页文字，与浏览器渲染不一致导致换行错乱：锁定 100%
+            settings.setTextZoom(100);
             settings.setUserAgentString(settings.getUserAgentString() + " ClassboardApp/" + BuildConfig.VERSION_NAME);
             try { CookieManager.getInstance().setAcceptCookie(true); } catch (Throwable ignored) {}
             webView.addJavascriptInterface(new Bridge(), "AndroidApp");
@@ -248,7 +250,7 @@ public class MainActivity extends Activity {
     private void showUpdateOverlay(String version) {
         final Overlay overlay = new Overlay("发现新版本 " + version,
                 "新版本已自动下载完成，点「立即安装」交给系统安装，登录状态会自动保留。\n\n"
-                        + "若系统提示「禁止安装未知应用」，请在随后弹出的设置页里允许「知会」安装应用，"
+                        + "若系统提示「禁止安装未知应用」，请在随后弹出的设置页里允许「知可而办」安装应用，"
                         + "返回后会自动继续安装。");
         overlay.button("立即安装", () -> {
             overlay.dismiss();
@@ -268,7 +270,7 @@ public class MainActivity extends Activity {
         }
         if (!Updater.canInstall(this)) {
             pendingInstall = true;
-            Toast.makeText(this, "请在设置里允许「知会」安装应用", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "请在设置里允许「知可而办」安装应用", Toast.LENGTH_LONG).show();
             Updater.requestInstallPermission(this);
             return;
         }
