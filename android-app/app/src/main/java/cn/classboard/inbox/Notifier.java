@@ -43,9 +43,16 @@ public final class Notifier {
     private static final String PREFS = "classboard";
     private static final int JOB_ID = 4101;
     private static final int ALARM_REQUEST = 4102;
-    private static final long POLL_INTERVAL_MS = 15 * 60 * 1000L;
-    private static final long POLL_THROTTLE_MS = 60_000L;
+    /** JobScheduler 的周期下限就是 15 分钟，想更快只能靠闹钟和常驻服务。 */
+    static final long JOB_INTERVAL_MS = 15 * 60 * 1000L;
+    static final long ALARM_INTERVAL_MS = 5 * 60 * 1000L;
+    static final long SERVICE_INTERVAL_MS = 60 * 1000L;
+    private static final long POLL_THROTTLE_MS = 20_000L;
+    /** 版本检查跟轮询解耦：一小时最多一次，别把请求量翻倍。 */
+    private static final long UPDATE_CHECK_MS = 60 * 60 * 1000L;
     private static final int MAX_SEEN = 800;
+    /** 由 KeepAliveService 维护，自检面板据此判断常驻是否真的在跑。 */
+    static volatile boolean serviceRunning = false;
 
     private Notifier() {}
 
@@ -78,7 +85,7 @@ public final class Notifier {
             JobInfo info = new JobInfo.Builder(JOB_ID, new ComponentName(context, PollJobService.class))
                     .setPersisted(true)
                     .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                    .setPeriodic(POLL_INTERVAL_MS)
+                    .setPeriodic(JOB_INTERVAL_MS)
                     .build();
             scheduler.schedule(info);
         } catch (Throwable t) {
@@ -91,7 +98,7 @@ public final class Notifier {
         try {
             AlarmManager manager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
             if (manager == null) return;
-            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + POLL_INTERVAL_MS, alarmIntent(context));
+            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + ALARM_INTERVAL_MS, alarmIntent(context));
         } catch (Throwable t) {
             Log.w("classboard", "alarm unavailable", t);
         }
@@ -124,11 +131,14 @@ public final class Notifier {
         long now = System.currentTimeMillis();
         if (now - prefs.getLong("last_poll_ms", 0L) < POLL_THROTTLE_MS) return;
         prefs.edit().putLong("last_poll_ms", now).putString("last_source", source).apply();
-        Updater.checkInBackground(context);  // 版本检查与登录状态无关
+        if (now - prefs.getLong("last_update_check", 0L) > UPDATE_CHECK_MS) {
+            prefs.edit().putLong("last_update_check", now).apply();
+            Updater.checkInBackground(context);
+        }
         String cookie = cookie(context);
-        if (cookie == null || !cookie.contains("cb_session=")) { record(prefs, "nologin", 0); return; }
+        if (cookie == null || !cookie.contains("cb_session=")) { record(prefs, source, "nologin", 0); return; }
         JSONArray notices = fetchNotices(cookie);
-        if (notices == null) { record(prefs, "network", 0); return; }
+        if (notices == null) { record(prefs, source, "network", 0); return; }
 
         LinkedHashSet<String> seen = readSeen(prefs);
         boolean seeded = prefs.getBoolean("seeded", false);
@@ -157,14 +167,19 @@ public final class Notifier {
         }
         saveSeen(prefs, next);
         prefs.edit().putBoolean("seeded", true).apply();
-        record(prefs, "ok", fresh.size());
+        record(prefs, source, "ok", fresh.size());
     }
 
-    private static void record(SharedPreferences prefs, String result, int fresh) {
-        prefs.edit().putLong("last_at", System.currentTimeMillis())
+    /** 顺带记一笔「后台检查」的次数与时间：自检面板靠它证明后台到底有没有在跑。 */
+    private static void record(SharedPreferences prefs, String source, String result, int fresh) {
+        SharedPreferences.Editor editor = prefs.edit()
+                .putLong("last_at", System.currentTimeMillis())
                 .putString("last_result", result)
-                .putInt("last_new", fresh)
-                .apply();
+                .putInt("last_new", fresh);
+        if (!"app".equals(source) && !"manual".equals(source)) {
+            editor.putLong("bg_at", System.currentTimeMillis()).putInt("bg_count", prefs.getInt("bg_count", 0) + 1);
+        }
+        editor.apply();
     }
 
     /** 「通知自检」面板用的状态快照，字段越少越好改。 */
@@ -185,6 +200,9 @@ public final class Notifier {
             json.put("lastResult", prefs.getString("last_result", "none"));
             json.put("lastNew", prefs.getInt("last_new", 0));
             json.put("lastSource", prefs.getString("last_source", ""));
+            json.put("bgAt", prefs.getLong("bg_at", 0L));
+            json.put("bgCount", prefs.getInt("bg_count", 0));
+            json.put("service", serviceRunning);
             json.put("job", hasJob(context));
             json.put("alarm", alarmPending(context));
             return json.toString();

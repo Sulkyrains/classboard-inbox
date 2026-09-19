@@ -9,15 +9,25 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 /**
- * 后台常驻：国内定制系统会冻结甚至清掉后台进程，前台服务能让进程活着，
- * 轮询由 JobScheduler / 闹钟负责找人，这里只负责「人还在」。
+ * 后台常驻：国内定制系统会冻结甚至清掉后台进程，前台服务让进程活着，
+ * 同时按分钟级节奏轮询——这是「发出去就能收到」的关键，闹钟只作深度休眠时的兜底。
  */
 public class KeepAliveService extends Service {
     private static final int ID = 4201;
     private static final String CHANNEL = "classboard-keepalive";
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable tick = new Runnable() {
+        @Override
+        public void run() {
+            try { Notifier.refreshAsync(getApplicationContext(), "service"); } catch (Throwable ignored) {}
+            try { handler.postDelayed(this, Notifier.SERVICE_INTERVAL_MS); } catch (Throwable ignored) {}
+        }
+    };
 
     static void start(Context context) {
         try {
@@ -36,7 +46,16 @@ public class KeepAliveService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Notifier.serviceRunning = true;
         try { foreground(); } catch (Throwable ignored) {}
+        try { handler.post(tick); } catch (Throwable ignored) {}
+    }
+
+    @Override
+    public void onDestroy() {
+        Notifier.serviceRunning = false;
+        try { handler.removeCallbacks(tick); } catch (Throwable ignored) {}
+        super.onDestroy();
     }
 
     private void foreground() {

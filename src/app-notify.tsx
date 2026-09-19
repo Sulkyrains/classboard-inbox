@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react';
 import {AlertTriangle,BatteryCharging,BellRing,CheckCircle2,RefreshCw,Rocket,Send} from 'lucide-react';
 import {isApp} from './ua';
 
-interface AppStatus{version:string;login:boolean;permission:boolean;enabled:boolean;ignoring:boolean;keepAlive:boolean;lastAt:number;lastResult:string;lastNew:number;lastSource:string;job:boolean;alarm:boolean;}
+interface AppStatus{version:string;login:boolean;permission:boolean;enabled:boolean;ignoring:boolean;keepAlive:boolean;lastAt:number;lastResult:string;lastNew:number;lastSource:string;bgAt:number;bgCount:number;service:boolean;job:boolean;alarm:boolean;}
 
 function read():AppStatus|null{
   try{const raw=window.AndroidApp?.notifyStatus?.();return raw?JSON.parse(raw) as AppStatus:null;}catch{return null;}
@@ -22,7 +22,7 @@ function outcome(s:AppStatus){
 /** App 内专用：手机通知自检。国产系统默认会冻结后台进程，这里让用户能一眼看到卡在哪一步。 */
 export function AppNotifyCheck(){
   const [status,setStatus]=useState<AppStatus|null>(read);
-  const [open,setOpen]=useState(()=>{const s=read();return !s||!s.permission||!s.enabled||!s.login||!(s.ignoring||s.keepAlive);});
+  const [open,setOpen]=useState(()=>{const s=read();return !s||!s.permission||!s.enabled||!s.login||!s.bgCount||!(s.job||s.alarm);});
   const [note,setNote]=useState('');
   useEffect(()=>{if(!isApp())return;const timer=window.setInterval(()=>setStatus(read()),3000);return()=>window.clearInterval(timer);},[]);
   if(!isApp()||!window.AndroidApp?.notifyStatus)return null;
@@ -31,13 +31,15 @@ export function AppNotifyCheck(){
     [!!status?.permission&&!!status?.enabled,'通知权限',status?.permission&&status?.enabled?'已允许':'被系统关闭，去手机设置里打开'],
     [!!status?.login,'登录状态',status?.login?'已登录':'已退出，请重新登录'],
     [!!status?.ignoring,'电池优化',status?.ignoring?'已豁免，后台不会被冻结':'未豁免，关掉 App 后可能收不到'],
-    [!!status?.keepAlive,'后台常驻',status?.keepAlive?'已开启':'已关闭'],
-    [!!(status?.job||status?.alarm),'后台唤醒',(status?.job||status?.alarm)?'已注册':'未注册，重启手机可自动恢复'],
+    [!!status?.keepAlive&&!!status?.service,'后台常驻',!status?.keepAlive?'已关闭':status?.service?'正在运行，每分钟检查一次':'已开启但未运行，重新打开 App 可恢复'],
+    [!!status?.bgCount,'后台检查',status?.bgCount?`已自动检查 ${status.bgCount} 次，最近一次 ${when(status.bgAt)}`:'还没有自动检查过，可能被系统限制，请点下面的「关闭电池优化」和「自启动设置」'],
+    [!!(status?.job||status?.alarm),'后台唤醒',(status?.job||status?.alarm)?'已注册':'未注册，重新打开 App 可恢复'],
   ];
   const healthy=rows.every(([ok])=>ok);
   return <div className="notify-check">
     <div className="notify-check-head">
       <strong>{healthy?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>}手机通知自检</strong>
+      {status?.version&&<span className="notify-version">v{status.version}</span>}
       <span className={healthy?'notify-pill ok':'notify-pill warn'}>{healthy?'一切正常':'有待处理'}</span>
       <button type="button" className="text-link" onClick={()=>setOpen(v=>!v)}>{open?'收起':'展开'}</button>
     </div>

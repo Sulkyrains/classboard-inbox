@@ -116,6 +116,7 @@
 .notify-check-head{display:flex;align-items:center;gap:9px;font-size:13px}
 .notify-check-head strong{display:flex;align-items:center;gap:6px;color:#3f5478}
 .notify-check-head .text-link{margin-left:auto;padding:4px}
+.notify-version{font-size:10px;color:#98a6ba;font-weight:400}
 .notify-pill{font-size:10px;padding:3px 7px;border-radius:5px}
 .notify-pill.ok{background:#e8f6f0;color:#3f9e80}
 .notify-pill.warn{background:#fff4e7;color:#b0762a}
@@ -127,6 +128,7 @@
 .notify-actions{display:flex;flex-wrap:wrap;gap:8px}
 .notify-actions .install-button{margin:0}
 :root[data-theme=dark] .notify-check-head strong{color:#b9c9e4}
+:root[data-theme=dark] .notify-version{color:#8395b3}
 :root[data-theme=dark] .notify-rows em{color:#a9bad6}
 :root[data-theme=dark] .notify-rows li.warn em{color:#d9ab5e}
 :root[data-theme=dark] .notify-pill.ok{background:#16352c;color:#71c8a8}
