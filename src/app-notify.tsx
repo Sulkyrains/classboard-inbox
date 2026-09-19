@@ -19,6 +19,18 @@ function outcome(s:AppStatus){
   return '还没有检查过';
 }
 
+const BANNER_SNOOZE_KEY='cb-notify-banner-until';
+/** 首页顶部提示条：同学装完 App、还没点进「个人账号」时，也能看到通知没设置好。 */
+export function useAppNotifyIssue(){
+  const [status,setStatus]=useState<AppStatus|null>(read);
+  const [hidden,setHidden]=useState(()=>{try{return Number(localStorage.getItem(BANNER_SNOOZE_KEY)||0)>Date.now();}catch{return false;}});
+  useEffect(()=>{if(!isApp())return;const timer=window.setInterval(()=>setStatus(read()),3000);return()=>window.clearInterval(timer);},[]);
+  const dismiss=()=>{try{localStorage.setItem(BANNER_SNOOZE_KEY,String(Date.now()+3*86400000));}catch{}setHidden(true);};
+  if(!isApp()||hidden||!status||!window.AndroidApp?.notifyStatus)return null;
+  const issue=!status.permission||!status.enabled?'通知权限被系统关掉了':!status.ignoring?'电池优化没关，App 被系统冻结后收不到通知':!status.keepAlive?'后台常驻没开':!status.service?'后台常驻没在运行':!status.job&&!status.alarm?'后台唤醒被系统清掉了':null;
+  return issue?{issue,dismiss}:null;
+}
+
 /** App 内专用：手机通知自检。国产系统默认会冻结后台进程，这里让用户能一眼看到卡在哪一步。 */
 export function AppNotifyCheck(){
   const [status,setStatus]=useState<AppStatus|null>(read);

@@ -133,6 +133,16 @@
 .notify-rows li.warn em{color:#b0762a}
 .notify-actions{display:flex;flex-wrap:wrap;gap:8px}
 .notify-alert{font-size:12px;line-height:1.7;color:#9c5d1c;background:#fff7e7;border:1px solid #f5e2bd;border-radius:8px;padding:10px 12px;margin:0}
+.notify-banner{display:flex;align-items:center;gap:10px;margin:0 0 18px;padding:12px 14px;border-radius:12px;color:#8a5416;background:#fff7e7;border:1px solid #f5e2bd}
+.notify-banner>svg{flex:none;color:#c07f22}
+.notify-banner>div{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.notify-banner strong{font-size:13px}
+.notify-banner span{font-size:12px;line-height:1.6;opacity:.85}
+.notify-banner .button{flex:none;padding:7px 14px;font-size:13px}
+.notify-banner .icon-button{flex:none}
+:root[data-theme=dark] .notify-banner{background:#2c2413;border-color:#4a3c1f;color:#d9ab5e}
+:root[data-theme=dark] .notify-banner>svg{color:#c9963f}
+@media (max-width:720px){.notify-banner{flex-wrap:wrap}.notify-banner>div{flex-basis:100%;order:1}.notify-banner>svg{order:0}.notify-banner .button{order:2}.notify-banner .icon-button{order:3;margin-left:auto}}
 .notify-actions .install-button{margin:0}
 :root[data-theme=dark] .notify-check-head strong{color:#b9c9e4}
 :root[data-theme=dark] .notify-version{color:#8395b3}

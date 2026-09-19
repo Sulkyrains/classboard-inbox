@@ -10,6 +10,18 @@ export function effectiveEnd(n: {deadline_at: string | null; event_at: string | 
 export function isExpired(n: {deadline_at: string | null; event_at: string | null}, now = Date.now()) {
   const end = effectiveEnd(n); return !!end && new Date(end).getTime() < now;
 }
+type Sortable = {deadline_at: string | null; event_at: string | null; published_at: string | null; created_at: string};
+/** 截止/活动时间快到的排最前，没有时间限制的按发布时间倒序居中，已经过期的沉底。 */
+export function byUrgency(a: Sortable, b: Sortable, now = Date.now()): number {
+  const rank = (n: Sortable) => {
+    const end = effectiveEnd(n);
+    if (!end) return { group: 2, at: Date.parse(n.published_at || n.created_at) };
+    const at = Date.parse(end); return { group: at < now ? 3 : 1, at };
+  };
+  const left = rank(a), right = rank(b);
+  if (left.group !== right.group) return left.group - right.group;
+  return left.group === 1 ? left.at - right.at : right.at - left.at;
+}
 export function countdown(date: string | null, now = Date.now()): string {
   if (!date) return '长期通知';
   const ms = new Date(date).getTime() - now;
