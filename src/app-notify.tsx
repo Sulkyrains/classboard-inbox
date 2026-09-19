@@ -36,6 +36,8 @@ export function AppNotifyCheck(){
     [!!(status?.job||status?.alarm),'后台唤醒',(status?.job||status?.alarm)?'已注册':'未注册，重新打开 App 可恢复'],
   ];
   const healthy=rows.every(([ok])=>ok);
+  // 两套唤醒都丢了基本只有一个原因：App 被强制停止（从最近任务划掉或被一键清理）
+  const wiped=!status?.job&&!status?.alarm;
   return <div className="notify-check">
     <div className="notify-check-head">
       <strong>{healthy?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>}手机通知自检</strong>
@@ -55,6 +57,8 @@ export function AppNotifyCheck(){
       <button type="button" className="install-button" onClick={()=>call(()=>window.AndroidApp?.openAutoStart?.())}><Rocket size={15}/>自启动设置</button>
     </div>
     {note&&<p className="field-hint" role="status">{note}</p>}
+    {wiped&&<p className="notify-alert"><strong>后台唤醒被系统清掉了。</strong>如果你刚才从「最近任务」里划掉过本 App，请以后不要再划——划掉等于强制停止，系统会禁止它自己醒过来。再点下面的「关闭电池优化」和「自启动设置」，然后重新打开一次 App 即可恢复。</p>}
+    <p className="field-hint">小提示：不要从最近任务里划掉本 App，也不要用「一键清理」清它，否则通知会断。</p>
     {status?.keepAlive&&<p className="field-hint">后台常驻会在通知栏留一条「知可而办正在后台接收通知」，不想看到就在上面关掉。</p>}
   </div>;
 }
