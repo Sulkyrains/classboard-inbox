@@ -119,6 +119,11 @@ public final class Notifier {
         if (on) KeepAliveService.start(context); else KeepAliveService.stop(context);
     }
 
+    /** 闹钟/任务跑起来时顺手检查常驻是否还活着：被系统清掉后能自愈。 */
+    static void ensureService(Context context) {
+        if (keepAlive(context) && !serviceRunning) KeepAliveService.start(context);
+    }
+
     static void refreshAsync(final Context context, final String source) {
         new Thread(() -> {
             try { refresh(context, source); } catch (Throwable ignored) {}

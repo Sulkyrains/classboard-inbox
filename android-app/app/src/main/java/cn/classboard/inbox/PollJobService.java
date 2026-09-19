@@ -9,6 +9,7 @@ public class PollJobService extends JobService {
         new Thread(() -> {
             try {
                 Notifier.refresh(PollJobService.this, "job");
+                Notifier.ensureService(PollJobService.this);
             } catch (Throwable ignored) {
             } finally {
                 jobFinished(params, false);

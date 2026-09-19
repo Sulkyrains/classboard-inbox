@@ -32,5 +32,7 @@ public class PollReceiver extends BroadcastReceiver {
         }).start();
         // 每次触发都要续上下一次：setAndAllowWhileIdle 只响一次
         try { Notifier.schedule(app); } catch (Throwable ignored) {}
+        // 系统清掉进程后，靠这一手在几分钟内自己站起来，不用等用户再点开 App
+        try { Notifier.ensureService(app); } catch (Throwable ignored) {}
     }
 }
