@@ -10,9 +10,11 @@ export function effectiveEnd(n: {deadline_at: string | null; event_at: string | 
 export function isExpired(n: {deadline_at: string | null; event_at: string | null}, now = Date.now()) {
   const end = effectiveEnd(n); return !!end && new Date(end).getTime() < now;
 }
-type Sortable = {deadline_at: string | null; event_at: string | null; published_at: string | null; created_at: string; pinned?: boolean};
-/** 班委置顶的永远在最前；其余按截止/活动时间快到的排最前，没有时间限制的按发布时间倒序居中，已经过期的沉底。 */
-export function byUrgency(a: Sortable, b: Sortable, now = Date.now()): number {
+type Sortable = {deadline_at: string | null; event_at: string | null; published_at: string | null; created_at: string; pinned?: boolean; id?: string};
+/** 已完成的整体沉到未完成之后（置顶的也一样）；其余按截止/活动时间快到的排最前，没有时间限制的按发布时间倒序居中，已经过期的沉底；置顶在各自分组内排最前。 */
+export function byUrgency(a: Sortable, b: Sortable, now = Date.now(), done?: ReadonlySet<string>): number {
+  const aDone = !!a.id && !!done?.has(a.id), bDone = !!b.id && !!done?.has(b.id);
+  if (aDone !== bDone) return aDone ? 1 : -1;
   if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
   const rank = (n: Sortable) => {
     const end = effectiveEnd(n);

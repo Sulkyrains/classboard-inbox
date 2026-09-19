@@ -18,11 +18,16 @@ a.install-button{text-decoration:none}
 .app-update{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:14px;max-width:calc(100% - 24px);width:max-content;padding:12px 16px;background:#203458;color:white;border-radius:12px;box-shadow:0 4px 20px #20345833;font-size:13px}
 .app-update button{display:flex;align-items:center;gap:6px;color:white;white-space:nowrap;text-decoration:underline;padding:6px}
 @media(display-mode:standalone){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}.sidebar{padding-top:calc(33px + env(safe-area-inset-top));padding-bottom:calc(20px + env(safe-area-inset-bottom))}}
-.notice-card.is-read{background:#f0f3f8;border-color:#e5eaf1;box-shadow:none}
-.notice-card.is-read .notice-title{color:#778498;font-weight:500}
-.notice-card.is-read .notice-preview{color:#8994a5}
-.notice-card.is-read .notice-symbol,.notice-card.is-read .category-badge{filter:grayscale(.7);opacity:.65}
+.notice-card.is-done{background:#f0f3f8;border-color:#e5eaf1;box-shadow:none}
+.notice-card.is-done .notice-title{color:#778498;font-weight:500}
+.notice-card.is-done .notice-preview{color:#8994a5}
+.notice-card.is-done .notice-symbol,.notice-card.is-done .category-badge{filter:grayscale(.7);opacity:.65}
+.notice-card.is-pinned.is-done{border-color:#e5eaf1}
 .notice-card.is-unread{border-color:#c5d6fb}
-.notice-card.is-unread .notice-meta{padding-right:30px}
-.unread-corner{position:absolute;top:0;right:0;padding:4px 9px;border-radius:0 14px 0 9px;background:#285be8;color:#fff;font-size:10px;line-height:1.5;font-weight:600}
+.notice-card .notice-meta{padding-right:52px}
+.notice-card.is-unread:not(.is-done) .notice-meta{padding-right:92px}
+.corner-badges{position:absolute;top:0;right:0;display:flex;border-radius:0 14px 0 9px;overflow:hidden}
+.corner-badges>span{padding:4px 9px;color:#fff;font-size:10px;line-height:1.5;font-weight:600}
+.unread-corner{background:#285be8}
 .done-corner{background:#2f9e7d}
+.todo-corner{background:#b3761c}

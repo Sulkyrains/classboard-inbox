@@ -48,7 +48,7 @@
 :root[data-theme=dark] .category-tabs button.active{background:#1c2b50;color:#7d9bf5}
 :root[data-theme=dark] .notice-card:hover{box-shadow:0 6px 24px #00000040}
 :root[data-theme=dark] .notice-card.is-pinned,:root[data-theme=dark] .notice-card.is-unread{border-color:#31508c}
-:root[data-theme=dark] .notice-card.is-read{background:#0f1930;border-color:#1d2a47}
+:root[data-theme=dark] .notice-card.is-done{background:#0f1930;border-color:#1d2a47}
 :root[data-theme=dark] .notice-title{color:#c8d6ef}
 :root[data-theme=dark] .timeline-point{background:#111d36}
 :root[data-theme=dark] .timeline-item{border-left-color:#1d2a47}

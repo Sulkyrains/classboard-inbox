@@ -3,7 +3,7 @@ import {byUrgency,effectiveEnd,isExpired,countdown,dayKey} from '../src/shared/d
 
 const NOW=Date.parse('2026-09-19T12:00:00+08:00');
 const base={published_at:'2026-09-01T00:00:00.000Z',created_at:'2026-09-01T00:00:00.000Z'};
-const make=(title:string,deadline_at:string|null,event_at:string|null=null,published_at=base.published_at,pinned=false)=>({title,deadline_at,event_at,published_at,created_at:base.created_at,pinned});
+const make=(title:string,deadline_at:string|null,event_at:string|null=null,published_at=base.published_at,pinned=false)=>({id:title,title,deadline_at,event_at,published_at,created_at:base.created_at,pinned});
 
 describe('byUrgency',()=>{
   it('置顶的排在最前，且置顶内部也按紧急度排',()=>{
@@ -42,6 +42,15 @@ describe('byUrgency',()=>{
     const older=make('旧','',null,'2026-09-01T00:00:00.000Z');
     const newer=make('新','',null,'2026-09-15T00:00:00.000Z');
     expect([older,newer].sort((a,b)=>byUrgency(a,b,NOW)).map(n=>n.title)).toEqual(['新','旧']);
+  });
+  it('已完成的沉到未完成之后，置顶的在已完成组内仍然最前',()=>{
+    const pinnedTodo=make('置顶未完成','2026-09-25T10:00:00+08:00',null,base.published_at,true);
+    const soonTodo=make('快到期未完成','2026-09-20T10:00:00+08:00');
+    const pinnedDone=make('置顶已完成','2026-09-21T10:00:00+08:00',null,base.published_at,true);
+    const plainDone=make('普通已完成','2026-09-20T09:00:00+08:00');
+    const doneIds=new Set([pinnedDone.id,plainDone.id]);
+    expect([plainDone,pinnedDone,soonTodo,pinnedTodo].sort((a,b)=>byUrgency(a,b,NOW,doneIds)).map(n=>n.title))
+      .toEqual(['置顶未完成','快到期未完成','置顶已完成','普通已完成']);
   });
   it('截止时间优先于活动时间（沿用 effectiveEnd 规则）',()=>{
     const n=make('两者都有','2026-09-21T10:00:00+08:00','2026-09-20T10:00:00+08:00');
