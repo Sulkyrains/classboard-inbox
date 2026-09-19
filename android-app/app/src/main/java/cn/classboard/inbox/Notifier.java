@@ -137,8 +137,16 @@ public final class Notifier {
         }
         String cookie = cookie(context);
         if (cookie == null || !cookie.contains("cb_session=")) { record(prefs, source, "nologin", 0); return; }
-        JSONArray notices = fetchNotices(cookie);
+        boolean[] notModified = new boolean[1];
+        String[] freshTag = new String[1];
+        int[] code = new int[1];
+        JSONArray notices = fetchNotices(cookie, prefs.getString("feed_etag", null), notModified, freshTag, code);
+        // 列表没变时服务端只读一行版本号就回 304：一分钟一轮也不会把数据库额度烧穿。
+        if (notModified[0]) { record(prefs, source, "ok", 0); return; }
+        // 会话过期和网络不通要分开报：否则自检面板会把「该重新登录」说成「网络有问题」。
+        if (code[0] == 401) { prefs.edit().remove("feed_etag").apply(); record(prefs, source, "nologin", 0); return; }
         if (notices == null) { record(prefs, source, "network", 0); return; }
+        if (freshTag[0] != null) prefs.edit().putString("feed_etag", freshTag[0]).apply();
 
         LinkedHashSet<String> seen = readSeen(prefs);
         boolean seeded = prefs.getBoolean("seeded", false);
@@ -188,7 +196,8 @@ public final class Notifier {
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             JSONObject json = new JSONObject();
             json.put("version", BuildConfig.VERSION_NAME);
-            json.put("login", cookie(context) != null);
+            // 上次检查被服务端判了未登录时，别再看 cookie 装已登录：面板要说得准。
+            json.put("login", cookie(context) != null && !"nologin".equals(prefs.getString("last_result", "")));
             json.put("permission", Build.VERSION.SDK_INT < 33
                     || context.checkSelfPermission("android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED);
             NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -235,10 +244,34 @@ public final class Notifier {
                 "能看到这条通知，说明这台手机的通知权限正常。", null);
     }
 
-    private static JSONArray fetchNotices(String cookie) {
-        String text = httpGet(API_NOTICES, cookie);
-        if (text == null) return null;
-        try { return new JSONObject(text).optJSONArray("notices"); } catch (Exception e) { return null; }
+    /** 带 ETag 校验拉取列表：notModified[0] 为真表示服务端回了 304，沿用上次结果。 */
+    private static JSONArray fetchNotices(String cookie, String etag, boolean[] notModified, String[] freshTag, int[] codeOut) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(API_NOTICES).openConnection();
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(15000);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("User-Agent", UA);
+            if (cookie != null) connection.setRequestProperty("Cookie", cookie);
+            if (etag != null && !etag.isEmpty()) connection.setRequestProperty("If-None-Match", etag);
+            int code = connection.getResponseCode();
+            codeOut[0] = code;
+            if (code == 304) { notModified[0] = true; return null; }
+            if (code != 200) return null;
+            freshTag[0] = connection.getHeaderField("ETag");
+            try (InputStream in = connection.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+                return new JSONObject(out.toString(StandardCharsets.UTF_8.name())).optJSONArray("notices");
+            }
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
     }
 
     /** 网页内新通知：走 JS 桥，id 用于去重，避免与后台轮询重复提醒。 */
