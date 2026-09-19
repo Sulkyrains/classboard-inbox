@@ -110,3 +110,24 @@
 :root[data-theme=dark] .ios-nudge{background:#2e2716;border-color:#4a3d20}
 :root[data-theme=dark] .ios-nudge strong{color:#d9b46a}
 :root[data-theme=dark] .ios-nudge p{color:#bda169}
+
+/* App 内「手机通知自检」：一眼看出是权限、登录还是后台被系统限制 */
+.notify-check{display:flex;flex-direction:column;gap:11px;border:1px solid var(--line);border-radius:12px;padding:15px;margin-bottom:14px}
+.notify-check-head{display:flex;align-items:center;gap:9px;font-size:13px}
+.notify-check-head strong{display:flex;align-items:center;gap:6px;color:#3f5478}
+.notify-check-head .text-link{margin-left:auto;padding:4px}
+.notify-pill{font-size:10px;padding:3px 7px;border-radius:5px}
+.notify-pill.ok{background:#e8f6f0;color:#3f9e80}
+.notify-pill.warn{background:#fff4e7;color:#b0762a}
+.notify-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.notify-rows li{display:flex;gap:10px;font-size:12px;line-height:1.6}
+.notify-rows span{color:#8c9ab1;flex:0 0 68px}
+.notify-rows em{font-style:normal;color:#5a6d8c;min-width:0;overflow-wrap:anywhere}
+.notify-rows li.warn em{color:#b0762a}
+.notify-actions{display:flex;flex-wrap:wrap;gap:8px}
+.notify-actions .install-button{margin:0}
+:root[data-theme=dark] .notify-check-head strong{color:#b9c9e4}
+:root[data-theme=dark] .notify-rows em{color:#a9bad6}
+:root[data-theme=dark] .notify-rows li.warn em{color:#d9ab5e}
+:root[data-theme=dark] .notify-pill.ok{background:#16352c;color:#71c8a8}
+:root[data-theme=dark] .notify-pill.warn{background:#3a2d17;color:#d9ab5e}

@@ -3,6 +3,7 @@ package cn.classboard.inbox;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
@@ -66,7 +67,8 @@ public class MainActivity extends Activity {
         if (safeMode) return;
         try { requestNotificationPermission(); } catch (Throwable ignored) {}
         try { Notifier.schedule(this); } catch (Throwable t) { Log.w(TAG, "schedule failed", t); }
-        try { Notifier.refreshAsync(this); } catch (Throwable ignored) {}
+        try { if (Notifier.keepAlive(this)) KeepAliveService.start(this); } catch (Throwable ignored) {}
+        try { Notifier.refreshAsync(this, "app"); } catch (Throwable ignored) {}
         try { Updater.checkAsync(this, this::onUpdateReady); } catch (Throwable ignored) {}
         handleIntent(getIntent());
     }
@@ -284,6 +286,42 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 申请「电池不优化」：不豁免的话，国产系统会在息屏后冻结后台任务。 */
+    private void requestIgnoreBattery() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (Throwable t) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 自启动白名单：各家入口都不一样，按机型挨个试，最后退回应用详情页。 */
+    private void openAutoStartSettings() {
+        String[][] targets = {
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"},
+                {"com.coloros.oppoguardelf", "com.coloros.powermanager.fuelgaue.PowerUsageModelActivity"},
+                {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+                {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"},
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"},
+                {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
+                {"com.transsion.phonemaster", "com.cyin.himgr.bigclean.activity.WhiteListActivity"},
+        };
+        for (String[] target : targets) {
+            try {
+                startActivity(new Intent().setComponent(new ComponentName(target[0], target[1])));
+                return;
+            } catch (Throwable ignored) {}
+        }
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (Throwable ignored) {}
+    }
+
     // ---- 出错时的兜底界面：任何情况下都不留黑屏 ----
 
     private void showLoadError(String reason) {
@@ -401,13 +439,14 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        try { Notifier.refreshAsync(this); } catch (Throwable ignored) {}
+        try { Notifier.refreshAsync(this, "app"); } catch (Throwable ignored) {}
         handleIntent(intent);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        try { Notifier.refreshAsync(this, "app"); } catch (Throwable ignored) {}
         // 从「安装未知应用」授权页回来：自动继续安装
         if (pendingInstall && Updater.canInstall(this)) {
             pendingInstall = false;
@@ -448,6 +487,37 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void theme(String mode) {
             try { runOnUiThread(() -> applyTheme("dark".equals(mode))); } catch (Throwable ignored) {}
+        }
+
+        /** 「通知自检」面板：返回权限、登录、电池优化、上次检查结果等状态。 */
+        @JavascriptInterface
+        public String notifyStatus() {
+            try { return Notifier.status(MainActivity.this); } catch (Throwable ignored) { return "{}"; }
+        }
+
+        @JavascriptInterface
+        public void checkNow() {
+            try { Notifier.refreshAsync(MainActivity.this, "manual"); } catch (Throwable ignored) {}
+        }
+
+        @JavascriptInterface
+        public void testNotification() {
+            try { Notifier.testNotify(MainActivity.this); } catch (Throwable ignored) {}
+        }
+
+        @JavascriptInterface
+        public void setKeepAlive(boolean on) {
+            try { Notifier.setKeepAlive(MainActivity.this, on); } catch (Throwable ignored) {}
+        }
+
+        @JavascriptInterface
+        public void openBatterySettings() {
+            try { runOnUiThread(MainActivity.this::requestIgnoreBattery); } catch (Throwable ignored) {}
+        }
+
+        @JavascriptInterface
+        public void openAutoStart() {
+            try { runOnUiThread(MainActivity.this::openAutoStartSettings); } catch (Throwable ignored) {}
         }
 
         /** 网页里的「检查更新」按钮：发现新版本就直接弹安装框，否则提示已是最新。 */

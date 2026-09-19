@@ -1,5 +1,6 @@
 package cn.classboard.inbox;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -12,6 +13,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.PowerManager;
 import android.util.Log;
 import android.webkit.CookieManager;
 
@@ -27,7 +29,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-/** 通知与后台轮询：不依赖 GMS，用系统 JobScheduler + 直连班级 API。 */
+/**
+ * 通知与后台轮询：不依赖 GMS，用系统 JobScheduler + AlarmManager 直连班级 API。
+ * 国内定制系统（ColorOS/OriginOS 等）会冻结后台进程，所以这里做了双通道唤醒：
+ * JobScheduler 负责常规调度，AlarmManager 的 doze 例外闹钟做兜底，两者都失败就只能靠打开 App。
+ */
 public final class Notifier {
     static final String SITE = "https://classboard-upc.pages.dev/";
     static final String API_NOTICES = "https://classboard-upc.pages.dev/api/notices";
@@ -36,12 +42,31 @@ public final class Notifier {
     static final String UA = "Mozilla/5.0 (Linux; Android " + Build.VERSION.RELEASE + ") AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36 ClassboardApp/" + BuildConfig.VERSION_NAME;
     private static final String PREFS = "classboard";
     private static final int JOB_ID = 4101;
-    private static final int MAX_SEEN = 800;
+    private static final int ALARM_REQUEST = 4102;
+    private static final long POLL_INTERVAL_MS = 15 * 60 * 1000L;
     private static final long POLL_THROTTLE_MS = 60_000L;
+    private static final int MAX_SEEN = 800;
 
     private Notifier() {}
 
+    /** 两套后台唤醒都注册上：JobScheduler 省电、闹钟扛得住系统冻结。 */
     static void schedule(Context context) {
+        scheduleJob(context);
+        scheduleAlarm(context);
+    }
+
+    static void cancelBackground(Context context) {
+        try {
+            JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (scheduler != null) scheduler.cancel(JOB_ID);
+        } catch (Throwable ignored) {}
+        try {
+            AlarmManager manager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (manager != null) manager.cancel(alarmIntent(context));
+        } catch (Throwable ignored) {}
+    }
+
+    private static void scheduleJob(Context context) {
         // 部分定制系统上 JobScheduler 会抛异常，轮询失败也不能影响界面
         try {
             JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
@@ -53,7 +78,7 @@ public final class Notifier {
             JobInfo info = new JobInfo.Builder(JOB_ID, new ComponentName(context, PollJobService.class))
                     .setPersisted(true)
                     .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                    .setPeriodic(15 * 60 * 1000L)
+                    .setPeriodic(POLL_INTERVAL_MS)
                     .build();
             scheduler.schedule(info);
         } catch (Throwable t) {
@@ -61,23 +86,49 @@ public final class Notifier {
         }
     }
 
-    static void refreshAsync(final Context context) {
+    /** setAndAllowWhileIdle 不需要「精确闹钟」权限，且在 doze 里也能唤醒。 */
+    private static void scheduleAlarm(Context context) {
+        try {
+            AlarmManager manager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (manager == null) return;
+            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + POLL_INTERVAL_MS, alarmIntent(context));
+        } catch (Throwable t) {
+            Log.w("classboard", "alarm unavailable", t);
+        }
+    }
+
+    private static PendingIntent alarmIntent(Context context) {
+        Intent intent = new Intent(context, PollReceiver.class).setAction(PollReceiver.ACTION_POLL);
+        return PendingIntent.getBroadcast(context, ALARM_REQUEST, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** 后台常驻（前台服务）：国产系统上保持进程存活，默认开启，可在「个人账号」里关掉。 */
+    static boolean keepAlive(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("keep_alive", true);
+    }
+
+    static void setKeepAlive(Context context, boolean on) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("keep_alive", on).apply();
+        if (on) KeepAliveService.start(context); else KeepAliveService.stop(context);
+    }
+
+    static void refreshAsync(final Context context, final String source) {
         new Thread(() -> {
-            try { refresh(context); } catch (Throwable ignored) {}
+            try { refresh(context, source); } catch (Throwable ignored) {}
         }).start();
     }
 
     /** 拉取一次通知列表，把新通知发成本地系统通知。 */
-    static void refresh(Context context) {
+    static void refresh(Context context, String source) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         long now = System.currentTimeMillis();
         if (now - prefs.getLong("last_poll_ms", 0L) < POLL_THROTTLE_MS) return;
-        prefs.edit().putLong("last_poll_ms", now).apply();
+        prefs.edit().putLong("last_poll_ms", now).putString("last_source", source).apply();
         Updater.checkInBackground(context);  // 版本检查与登录状态无关
         String cookie = cookie(context);
-        if (cookie == null || !cookie.contains("cb_session=")) return;
+        if (cookie == null || !cookie.contains("cb_session=")) { record(prefs, "nologin", 0); return; }
         JSONArray notices = fetchNotices(cookie);
-        if (notices == null) return;
+        if (notices == null) { record(prefs, "network", 0); return; }
 
         LinkedHashSet<String> seen = readSeen(prefs);
         boolean seeded = prefs.getBoolean("seeded", false);
@@ -106,6 +157,64 @@ public final class Notifier {
         }
         saveSeen(prefs, next);
         prefs.edit().putBoolean("seeded", true).apply();
+        record(prefs, "ok", fresh.size());
+    }
+
+    private static void record(SharedPreferences prefs, String result, int fresh) {
+        prefs.edit().putLong("last_at", System.currentTimeMillis())
+                .putString("last_result", result)
+                .putInt("last_new", fresh)
+                .apply();
+    }
+
+    /** 「通知自检」面板用的状态快照，字段越少越好改。 */
+    static String status(Context context) {
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            JSONObject json = new JSONObject();
+            json.put("version", BuildConfig.VERSION_NAME);
+            json.put("login", cookie(context) != null);
+            json.put("permission", Build.VERSION.SDK_INT < 33
+                    || context.checkSelfPermission("android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED);
+            NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            json.put("enabled", manager == null || manager.areNotificationsEnabled());
+            PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            json.put("ignoring", power != null && power.isIgnoringBatteryOptimizations(context.getPackageName()));
+            json.put("keepAlive", keepAlive(context));
+            json.put("lastAt", prefs.getLong("last_at", 0L));
+            json.put("lastResult", prefs.getString("last_result", "none"));
+            json.put("lastNew", prefs.getInt("last_new", 0));
+            json.put("lastSource", prefs.getString("last_source", ""));
+            json.put("job", hasJob(context));
+            json.put("alarm", alarmPending(context));
+            return json.toString();
+        } catch (Throwable t) {
+            return "{}";
+        }
+    }
+
+    private static boolean hasJob(Context context) {
+        try {
+            JobScheduler scheduler = (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (scheduler == null) return false;
+            for (JobInfo job : scheduler.getAllPendingJobs()) if (job.getId() == JOB_ID) return true;
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    private static boolean alarmPending(Context context) {
+        try {
+            Intent intent = new Intent(context, PollReceiver.class).setAction(PollReceiver.ACTION_POLL);
+            return PendingIntent.getBroadcast(context, ALARM_REQUEST, intent, PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE) != null;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 自检面板里的「发送测试通知」：只发本地通知，不经过服务器。 */
+    static void testNotify(Context context) {
+        notify(context, "selftest-" + System.currentTimeMillis(), "知可而办 · 测试通知",
+                "能看到这条通知，说明这台手机的通知权限正常。", null);
     }
 
     private static JSONArray fetchNotices(String cookie) {

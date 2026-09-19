@@ -3,4 +3,8 @@
     <string name="app_name">知可而办</string>
     <string name="channel_name">班级通知</string>
     <string name="channel_desc">班委发布新通知时提醒</string>
+    <string name="keepalive_channel">后台通知服务</string>
+    <string name="keepalive_desc">保持后台运行，这样关掉 App 也能收到班级通知</string>
+    <string name="keepalive_title">知可而办正在后台接收通知</string>
+    <string name="keepalive_text">有新通知会第一时间提醒你</string>
 </resources>
