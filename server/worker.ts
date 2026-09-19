@@ -212,9 +212,12 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   }
   if(user.must_change_password)return json({error:'请先修改初始密码',code:'PASSWORD_CHANGE_REQUIRED'},403);
   if(path==='/api/account/push'&&method==='GET'){
-    if(!pushAvailable(env))return json({publicKey:null,subscriptions:0,enabled:false});
+    if(!pushAvailable(env))return json({publicKey:null,subscriptions:0,enabled:false,thisDevice:false});
     const count=await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id=?').bind(user.id).first<{n:number}>();
-    return json({publicKey:env.VAPID_PUBLIC_KEY,subscriptions:count?.n||0,enabled:true});
+    // 前端自检用：带 endpoint 时顺便回答「这台设备服务端登记了吗」，否则本地订阅丢了会一直被蒙在鼓里
+    const endpoint=url.searchParams.get('endpoint')||'';
+    const known=endpoint&&endpoint.length<=1000?await env.DB.prepare('SELECT 1 AS ok FROM push_subscriptions WHERE user_id=? AND endpoint=?').bind(user.id,endpoint).first<{ok:number}>():null;
+    return json({publicKey:env.VAPID_PUBLIC_KEY,subscriptions:count?.n||0,enabled:true,thisDevice:!!known});
   }
   if(path==='/api/account/push/subscribe'&&method==='POST'){
     if(!pushAvailable(env))return json({error:'推送服务尚未配置'},503);
