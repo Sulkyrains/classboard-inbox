@@ -17,7 +17,7 @@ a.install-button{text-decoration:none}
 .install-warn{color:#b0762a;font-weight:600}
 .app-update{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:14px;max-width:calc(100% - 24px);width:max-content;padding:12px 16px;background:#203458;color:white;border-radius:12px;box-shadow:0 4px 20px #20345833;font-size:13px}
 .app-update button{display:flex;align-items:center;gap:6px;color:white;white-space:nowrap;text-decoration:underline;padding:6px}
-@media(display-mode:standalone){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}}
+@media(display-mode:standalone){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}.sidebar{padding-top:calc(33px + env(safe-area-inset-top));padding-bottom:calc(20px + env(safe-area-inset-bottom))}}
 .notice-card.is-read{background:#f0f3f8;border-color:#e5eaf1;box-shadow:none}
 .notice-card.is-read .notice-title{color:#778498;font-weight:500}
 .notice-card.is-read .notice-preview{color:#8994a5}

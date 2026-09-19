@@ -1,5 +1,5 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
-import { derive, equal, sha256 } from './auth';
+import { hashPassword, sha256, verifyPassword, ITERATIONS } from './auth';
 import { parseMessages } from '../src/parser';
 import { llmAdapter,type LlmEnv } from './llm';
 import { loadVapid,sendPush,type PushPayload } from './push';
@@ -40,6 +40,21 @@ const FEED_CACHE='private, no-cache';
 /** 命中缓存时不带正文返回，客户端直接复用上一次的列表。 */
 const notModified=(etag: string) => new Response(null,{status:304,headers:{ETag:etag,'Cache-Control':FEED_CACHE,'X-Content-Type-Options':'nosniff'}});
 const json = (body: unknown, status=200, headers: Record<string,string>={}) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
+/** 静态资源的安全头由 public/_headers 下发，但 /api/* 由 Worker 直接返回，必须自己补上。 */
+const SECURITY_HEADERS: Record<string,string> = {
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+};
+function secure(response: Response): Response {
+  const headers=new Headers(response.headers);
+  for(const [name,value] of Object.entries(SECURITY_HEADERS))if(!headers.has(name))headers.set(name,value);
+  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+}
 
 async function readBody(request: Request): Promise<Record<string,unknown>> {
   if(!request.headers.get('Content-Type')?.startsWith('application/json')) fail(415,'请使用 JSON 格式');
@@ -144,8 +159,9 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const counters=await env.DB.batch<{attempts:number}>([attempt(env.DB,bucket,now),attempt(env.DB,ipBucket,now)]);
     if(Number(counters[0].results[0]?.attempts)>8||Number(counters[1].results[0]?.attempts)>200)return json({error:'尝试次数过多，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const row=await env.DB.prepare('SELECT * FROM users WHERE student_id=?').bind(username).first<Admin & {salt:string;digest:string}>();
-    const digest=await derive(secret,row?.salt||'unregistered-account');
-    if(!row||!equal(digest,row.digest)||row.display_name!==name)fail(401,'姓名、学号或密码不正确');
+    // 账号不存在时也照同样成本推导一次：响应时间不泄漏学号是否注册。
+    const verified=await verifyPassword(secret,row?.salt||'unregistered-account',row?.digest||`pbkdf2$sha256$${ITERATIONS}$${'0'.repeat(64)}`);
+    if(!row||!verified||row.display_name!==name)fail(401,'姓名、学号或密码不正确');
     const id=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
     const authenticated=await env.DB.batch([
       env.DB.prepare('INSERT INTO user_sessions(id_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND digest=?').bind(await sha256(id),now+SESSION_MS,row.id,row.digest),
@@ -170,8 +186,9 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(typeof current!=='string'||current.length>256||typeof next!=='string'||next.length<6||next.length>256||!next.trim()||next===current)fail(400,'新密码须为 6—256 位，且不能与原密码相同');
     if(weakPassword(next,user.student_id))fail(400,'新密码过于简单，请不要使用学号、连续或重复的数字，以及常见密码');
     const row=await env.DB.prepare('SELECT salt,digest FROM users WHERE id=?').bind(user.id).first<{salt:string;digest:string}>();
-    if(!row||!equal(await derive(current,row.salt),row.digest))fail(400,'当前密码不正确');
-    const salt=crypto.randomUUID(), digest=await derive(next,salt);
+    const verified=row?await verifyPassword(current,row.salt,row.digest):false;
+    if(!row||!verified)fail(400,'当前密码不正确');
+    const salt=crypto.randomUUID(), digest=await hashPassword(next,salt);
     const result=await env.DB.batch([
       env.DB.prepare('UPDATE users SET salt=?,digest=?,must_change_password=0 WHERE id=? AND digest=?').bind(salt,digest,user.id,row.digest),
       env.DB.prepare('DELETE FROM user_sessions WHERE user_id=?').bind(user.id),
@@ -345,10 +362,14 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
 }
 export default {
   async fetch(request: Request,env: Env,ctx: ExecutionContext): Promise<Response> {
-    try{return await route(request,env,ctx);}catch(error){
-      if(error instanceof HttpError)return json({error:error.message},error.status);
-      // Never log request bodies, database contents, session values or credentials.
-      return json({error:'服务暂时不可用，请稍后重试'},500);
+    try{
+      const response=await route(request,env,ctx);
+      return new URL(request.url).pathname.startsWith('/api/')?secure(response):response;
+    }catch(error){
+      if(error instanceof HttpError)return secure(json({error:error.message},error.status));
+      // 只记错误类型与信息，便于排查线上故障；绝不记录请求体、数据库内容、会话值或口令。
+      console.error(`[api] ${new URL(request.url).pathname} failed: ${error instanceof Error?`${error.name}: ${error.message}`:'unknown error'}`);
+      return secure(json({error:'服务暂时不可用，请稍后重试'},500));
     }
   }
 };

@@ -16,9 +16,17 @@ try{
   const revalidate=async path=>{etagHeader=null;const first=await call(path);const tag=first.headers.get('ETag');
     etagHeader=tag;const second=await call(path);etagHeader=null;
     return {tag,status:first.status,cached:second.status,cachedBody:await second.text()};};
-  assert.equal((await call('/admin/notices')).status,401);
+  const denied=await call('/admin/notices');assert.equal(denied.status,401);
+  // 静态资源的安全头由 public/_headers 下发，/api/* 由 Worker 自己补：错误响应也必须带上
+  for(const [name,expected] of [['Strict-Transport-Security','max-age=31536000; includeSubDomains'],['Cross-Origin-Resource-Policy','same-origin'],['X-Content-Type-Options','nosniff'],['X-Frame-Options','DENY'],['Referrer-Policy','no-referrer']])assert.equal(denied.headers.get(name),expected);
+  assert.match(denied.headers.get('Content-Security-Policy'),/default-src 'none'/);
   assert.equal((await call('/login','POST',{student_id:'integration-admin',name:'测试班委',password:secret},false,'https://evil.test')).status,403);
   const login=await call('/login','POST',{student_id:'integration-admin',name:'测试班委',password:secret});assert.equal(login.status,200);
+  assert.equal(login.headers.get('Strict-Transport-Security'),'max-age=31536000; includeSubDomains');
+  assert.match(login.headers.get('Content-Security-Policy'),/default-src 'none'/);
+  // 旧版裸 hex 摘要必须继续可登录：Cloudflare 的 PBKDF2 上限就是 10 万次，登录不会再改写摘要
+  const storedDigest=await db.prepare('SELECT digest FROM users WHERE student_id=?').bind('integration-admin').first();
+  assert.match(storedDigest.digest,/^[a-f0-9]{64}$/);
   const setCookie=login.headers.get('Set-Cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/Secure/);assert.match(setCookie,/SameSite=Strict/);cookie=setCookie.split(';')[0];
   assert.equal((await call('/notices','GET',undefined,false)).status,401);
   assert.equal((await call('/login','POST',{student_id:'integration-admin',name:'错误姓名',password:secret})).status,401);
@@ -34,6 +42,9 @@ try{
   const newSecret=randomBytes(3).toString('hex');
   const changed=await call('/account/password','POST',{current_password:secret,new_password:newSecret});
   assert.equal(changed.status,200);assert.equal((await changed.json()).user.must_change_password,false);
+  // 改密后写入带参数的摘要格式，参数值受平台上限约束（PBKDF2 最多 10 万次迭代）
+  const rotatedDigest=await db.prepare('SELECT digest FROM users WHERE student_id=?').bind('test-student').first();
+  assert.match(rotatedDigest.digest,/^pbkdf2\$sha256\$100000\$[a-f0-9]{64}$/);
   const renewedCookie=changed.headers.get('Set-Cookie').split(';')[0];assert.notEqual(renewedCookie,cookie);
   assert.equal((await call('/notices')).status,401);
   cookie=renewedCookie;

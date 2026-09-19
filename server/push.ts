@@ -30,13 +30,14 @@ function concat(...parts: Uint8Array[]): Uint8Array {
   let offset = 0; for (const p of parts) { out.set(p, offset); offset += p.length; }
   return out;
 }
-async function encrypt(raw: string, keys: PushKeys, serverPublic: Uint8Array, serverPrivate: CryptoKey): Promise<Uint8Array> {
+/** RFC 8291 §3.4：IKM = HKDF-Expand(PRK_key, key_info, 32)，即 info 后必须再补一个 0x01。 */
+export async function encryptPayload(raw: string, keys: PushKeys, serverPublic: Uint8Array, serverPrivate: CryptoKey, saltOverride?: Uint8Array): Promise<Uint8Array> {
   const ua = unb64url(keys.p256dh), authSecret = unb64url(keys.auth);
   if (ua.length !== 65 || ua[0] !== 4) throw new Error('invalid client key');
   const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: await crypto.subtle.importKey('raw', ua as BufferSource, { name: 'ECDH', namedCurve: 'P-256' }, false, []) }, serverPrivate, 256));
   const prkKey = await hmac(authSecret, shared);
-  const ikm = await hmac(prkKey, concat(enc.encode('WebPush: info'), new Uint8Array(1), ua, serverPublic));
-  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const ikm = await hmac(prkKey, concat(enc.encode('WebPush: info'), new Uint8Array(1), ua, serverPublic, new Uint8Array([1])));
+  const salt = saltOverride ?? crypto.getRandomValues(new Uint8Array(16));
   const prk = await hmac(salt, ikm);
   const cek = (await hmac(prk, concat(enc.encode('Content-Encoding: aes128gcm'), new Uint8Array([0, 1])))).slice(0, 16);
   const nonceBase = (await hmac(prk, concat(enc.encode('Content-Encoding: nonce'), new Uint8Array([0, 1])))).slice(0, 12);
@@ -46,7 +47,7 @@ async function encrypt(raw: string, keys: PushKeys, serverPublic: Uint8Array, se
   header.set(salt); new DataView(header.buffer).setUint32(16, 4096); header[20] = serverPublic.length; header.set(serverPublic, 21);
   return concat(header, cipher);
 }
-async function vapidAuthorization(keys: VapidKeys, audience: string, subject: string): Promise<string> {
+export async function vapidAuthorization(keys: VapidKeys, audience: string, subject: string): Promise<string> {
   const claims = { aud: audience, exp: Math.floor(Date.now() / 1000) + 43200, sub: subject };
   const input = `${b64url(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })))}.${b64url(enc.encode(JSON.stringify(claims)))}`;
   const key = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: b64url(keys.publicKey.slice(1, 33)), y: b64url(keys.publicKey.slice(33, 65)), d: b64url(keys.privateKey), ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
@@ -57,7 +58,7 @@ async function vapidAuthorization(keys: VapidKeys, audience: string, subject: st
 export async function sendPush(sub: PushSubscriptionRow, payload: PushPayload, keys: VapidKeys, subject: string): Promise<boolean> {
   const ephemeral = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const serverPublic = new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
-  const body = await encrypt(JSON.stringify(payload), { p256dh: sub.p256dh, auth: sub.auth }, serverPublic, ephemeral.privateKey);
+  const body = await encryptPayload(JSON.stringify(payload), { p256dh: sub.p256dh, auth: sub.auth }, serverPublic, ephemeral.privateKey);
   const authorization = await vapidAuthorization(keys, new URL(sub.endpoint).origin, subject);
   const response = await fetch(sub.endpoint, { method: 'POST', headers: { TTL: '604800', Urgency: 'normal', Authorization: authorization, 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'aes128gcm' }, body: body as BufferSource });
   if (response.ok || [403, 413, 429].includes(response.status)) return true;

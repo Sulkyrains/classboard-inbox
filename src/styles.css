@@ -98,3 +98,15 @@
 .welcome-panel h2 .welcome-line{display:block;white-space:nowrap}
 @supports(font-size:1cqi){.welcome-panel h2{font-size:clamp(17px,12.5cqi,26px)}}
 @media(max-width:340px){.board-art{transform:scale(.68);width:100px}}
+
+/* iOS 安装提示卡：只给 iPhone 且未安装到桌面的同学看，可永久关闭 */
+.ios-nudge{display:flex;align-items:center;gap:18px;flex-wrap:wrap;background:#fff7e7;border:1px solid #f3e2bb;border-radius:var(--radius);padding:18px 22px;margin-bottom:22px}
+.ios-nudge>div:first-child{flex:1 1 240px;min-width:0}
+.ios-nudge strong{font-size:14px;color:#8a6420}
+.ios-nudge p{font-size:12px;color:#9c7c3f;line-height:1.7;margin-top:7px}
+.ios-nudge-actions{display:flex;gap:10px;flex-wrap:wrap}
+.ios-nudge .button{padding:9px 14px;font-size:12px;min-height:36px}
+.ios-nudge .install-guide{flex:1 1 100%;margin-top:0}
+:root[data-theme=dark] .ios-nudge{background:#2e2716;border-color:#4a3d20}
+:root[data-theme=dark] .ios-nudge strong{color:#d9b46a}
+:root[data-theme=dark] .ios-nudge p{color:#bda169}

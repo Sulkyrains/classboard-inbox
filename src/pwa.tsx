@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react';
 import {BellRing, BellOff, Send, Download, RefreshCw, Sun, Moon, PackageOpen} from 'lucide-react';
 import {api} from './api';
 import {envKind,guideFor,type EnvKind} from './install-guide';
-import {isApp,isIOS,syncAppTheme} from './ua';
+import {isApp,isIOS,isStandalone,syncAppTheme} from './ua';
 
 interface InstallPrompt extends Event {prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>}
 let prompt:InstallPrompt|null=null;
@@ -20,16 +20,30 @@ if('serviceWorker' in navigator&&import.meta.env.PROD){
     }).catch(()=>{});
   });
 }
-const standalone=()=>window.matchMedia('(display-mode: standalone)').matches||(navigator as Navigator & {standalone?:boolean}).standalone===true;
 export function InstallApp(){
   const [kind]=useState(envKind);
-  const [installed,setInstalled]=useState(standalone),[hint,setHint]=useState(()=>kind==='ios'||kind==='wechat'),[busy,setBusy]=useState(false);
-  useEffect(()=>{const update=()=>{setInstalled(standalone());};const installedNow=()=>setInstalled(true);window.addEventListener('pwa-state',update);window.addEventListener('appinstalled',installedNow);return()=>{window.removeEventListener('pwa-state',update);window.removeEventListener('appinstalled',installedNow);};},[]);
+  const [installed,setInstalled]=useState(isStandalone),[hint,setHint]=useState(()=>kind==='ios'||kind==='wechat'),[busy,setBusy]=useState(false);
+  useEffect(()=>{const update=()=>{setInstalled(isStandalone());};const installedNow=()=>setInstalled(true);window.addEventListener('pwa-state',update);window.addEventListener('appinstalled',installedNow);return()=>{window.removeEventListener('pwa-state',update);window.removeEventListener('appinstalled',installedNow);};},[]);
   if(installed||isApp())return null;
   const install=async()=>{if(!prompt){setHint(v=>!v);return;}setBusy(true);const current=prompt;prompt=null;try{await current.prompt();const choice=await current.userChoice;if(choice.outcome==='accepted')setInstalled(true);}catch{setHint(true);}finally{setBusy(false);}};
   const label=kind==='wechat'?'如何安装到桌面':kind==='ios'?'安装到 iPhone 桌面':'添加到手机桌面';
   const apk=kind==='android'||kind==='desktop';
   return <div className="install-app">{hint&&guideFor(kind)}<button type="button" className="install-button" onClick={()=>void install()} disabled={busy}><Download size={16}/>{busy?'正在打开安装提示…':hint?'收起指引':label}</button>{apk&&<a className="install-button" href="/classboard.apk" download="知可而办.apk"><PackageOpen size={16}/>下载安卓 App 安装包（独立运行，无需浏览器）</a>}</div>;
+}
+const IOS_HINT_KEY='cb-ios-hint';
+const iosHintDismissed=()=>{try{return localStorage.getItem(IOS_HINT_KEY)==='off';}catch{return false;}};
+/** iOS 用户通常不知道「添加到主屏幕」才会有推送：在今日看板给一张可关闭的提示卡。 */
+export function IOSInstallNudge(){
+  const [kind]=useState(envKind);
+  const [hidden,setHidden]=useState(iosHintDismissed);
+  const [steps,setSteps]=useState(false);
+  if(hidden||kind!=='ios'||isApp()||isStandalone())return null;
+  const dismiss=()=>{try{localStorage.setItem(IOS_HINT_KEY,'off');}catch{}setHidden(true);};
+  return <div className="ios-nudge" role="status">
+    <div><strong>在 iPhone 上接收横幅通知</strong><p>用 Safari 把「知可而办」添加到主屏幕，就能像 App 一样打开，并在班委发布通知时收到系统提醒。</p></div>
+    <div className="ios-nudge-actions"><button type="button" className="button primary" onClick={()=>setSteps(v=>!v)}>{steps?'收起安装步骤':'查看安装步骤'}</button><button type="button" className="button secondary" onClick={dismiss}>暂不提示</button></div>
+    {steps&&guideFor('ios')}
+  </div>;
 }
 export function AppUpdate(){
   const [ready,setReady]=useState(updateReady);
@@ -65,8 +79,9 @@ export function PushToggle(){
   const [busy,setBusy]=useState(false),[error,setError]=useState('');
   useEffect(()=>{
     const init=async()=>{
-      if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)||!('PushMessageData' in window)){setState('unsupported');return;}
-      if(isIOS()&&!(window.matchMedia('(display-mode: standalone)').matches||(navigator as Navigator & {standalone?:boolean}).standalone===true)){setState('ios-standalone');return;}
+      // iOS 的 Safari 标签页里没有推送能力，先判独立模式再判浏览器支持，提示才指得对方向。
+      if(isIOS()&&!isStandalone()){setState('ios-standalone');return;}
+      if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){setState('unsupported');return;}
       if(Notification.permission==='denied'){setState('denied');return;}
       const reg=await navigator.serviceWorker.getRegistration();
       const sub=reg?await reg.pushManager.getSubscription():null;
@@ -78,7 +93,7 @@ export function PushToggle(){
     setBusy(true);setError('');
     try{
       const permission=await Notification.requestPermission();
-      if(permission==='denied'){setState('denied');return;}
+      if(permission!=='granted'){setState(permission==='denied'?'denied':'off');if(permission==='default')setError('未获得通知权限：请在弹出的系统提示中选择「允许」后再试。');return;}
       const reg=await navigator.serviceWorker.ready;
       const info=await api<{publicKey:string|null,enabled:boolean}>('/account/push');
       if(!info.enabled||!info.publicKey)throw new Error('推送服务尚未配置，请联系网站维护者');
@@ -99,7 +114,7 @@ export function PushToggle(){
     }catch(e){setError((e as Error).message);}finally{setBusy(false);}
   };
   const test=async()=>{setBusy(true);setError('');try{await api('/account/push/test',{method:'POST',body:'{}'});}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
-  const hint=state==='ios-standalone'?<p className="field-hint">iPhone 上需先用 Safari「添加到主屏幕」，再从桌面打开本站即可开启推送。</p>:state==='denied'?<p className="field-hint">通知权限已被拒绝，请在浏览器设置的站点权限中重新允许。</p>:state==='unsupported'?<p className="field-hint">{envKind()==='wechat'?'微信/QQ 内置浏览器不支持推送，请点右上角「···」用系统浏览器打开本站。':'当前浏览器不支持推送通知，可继续使用网页查看通知。'}</p>:null;
+  const hint=state==='ios-standalone'?<p className="field-hint">iPhone 收推送需要先安装到桌面：用 Safari 打开本站 → 底部「分享」→「添加到主屏幕」，再从桌面打开「知可而办」，回到这里开启（系统需 iOS 16.4 或更新）。</p>:state==='denied'?<p className="field-hint">通知权限已被拒绝，请在浏览器设置的站点权限中重新允许。</p>:state==='unsupported'?<p className="field-hint">{envKind()==='wechat'?'微信/QQ 内置浏览器不支持推送，请点右上角「···」用系统浏览器打开本站。':isIOS()?'当前系统版本不支持推送（需 iOS 16.4 或更新），升级系统后从主屏幕打开即可开启。':'当前浏览器不支持推送通知，可继续使用网页查看通知。'}</p>:null;
   if(isApp())return null;
   if(state==='busy'||state==='unsupported'||state==='ios-standalone'||state==='denied')return <div className="install-app">{hint}</div>;
   return <div className="install-app">{state==='on'?<><button type="button" className="install-button" onClick={()=>void disable()} disabled={busy}><BellOff size={16}/>{busy?'正在关闭…':'关闭手机推送'}</button><button type="button" className="install-button" onClick={()=>void test()} disabled={busy}><Send size={16}/>{busy?'…':'发送测试推送'}</button></>:<button type="button" className="install-button" onClick={()=>void enable()} disabled={busy}><BellRing size={16}/>{busy?'正在开启…':'开启新通知推送'}</button>}

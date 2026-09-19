@@ -23,6 +23,8 @@ describe('install guide',()=>{
   it('renders step-by-step guide per platform',()=>{
     expect(renderToStaticMarkup(guideFor('ios'))).toContain('添加到主屏幕');
     expect(renderToStaticMarkup(guideFor('ios'))).toContain('Safari');
+    expect(renderToStaticMarkup(guideFor('ios'))).toContain('iOS 16.4');
+    expect(renderToStaticMarkup(guideFor('ios'))).toContain('允许通知');
     expect(renderToStaticMarkup(guideFor('wechat'))).toContain('在浏览器打开');
     expect(renderToStaticMarkup(guideFor('wechat'))).toContain('install-warn');
     expect(renderToStaticMarkup(guideFor('android'))).toContain('独立 App');
