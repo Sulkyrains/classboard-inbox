@@ -29,3 +29,8 @@ export function iosPushIssue(s: IosPushState): string | null {
   if (!s.thisDevice) return '本机的推送订阅没有同步到服务器：先「关闭手机推送」再重新「开启新通知推送」。';
   return null;
 }
+
+/** 首页提示条只在「已经装到主屏幕、但还有环节没弄好」时出现；还没装主屏幕的由安装引导卡负责，避免同一件事提醒两遍。 */
+export function iosBannerIssue(s: IosPushState): string | null {
+  return s.standalone ? iosPushIssue(s) : null;
+}

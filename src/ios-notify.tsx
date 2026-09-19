@@ -1,7 +1,7 @@
 import {useEffect,useState} from 'react';
 import {AlertTriangle,CheckCircle2,RefreshCw} from 'lucide-react';
 import {api} from './api';
-import {iosPushIssue,iosPushRows,type IosPushState} from './shared/ios-push';
+import {iosBannerIssue,iosPushIssue,iosPushRows,type IosPushState} from './shared/ios-push';
 import {isApp,isIOS,isStandalone} from './ua';
 
 async function read():Promise<IosPushState>{
@@ -18,6 +18,27 @@ async function read():Promise<IosPushState>{
     server=info.subscriptions||0;thisDevice=!!info.thisDevice;
   }catch{}
   return {standalone:isStandalone(),capable,permission:capable?Notification.permission:'unsupported',local,server,thisDevice};
+}
+
+const IOS_BANNER_KEY='cb-ios-notify-banner-until';
+/** 首页顶部提示条：已经装到主屏幕、但推送还有环节没弄好的 iPhone 用户，不必自己想到去翻「个人账号」。 */
+export function useIosNotifyIssue(){
+  const [state,setState]=useState<IosPushState|null>(null);
+  const [hidden,setHidden]=useState(()=>{try{return Number(localStorage.getItem(IOS_BANNER_KEY)||0)>Date.now();}catch{return false;}});
+  useEffect(()=>{
+    // 没装到主屏幕时提示条一定不会出现（安装引导卡负责那一档），干脆连轮询都不开，省电省请求
+    if(isApp()||!isIOS()||!isStandalone())return;
+    let stopped=false;
+    const check=()=>{void read().then(s=>{if(!stopped)setState(s);});};
+    check();
+    const timer=window.setInterval(()=>{if(document.visibilityState==='visible')check();},60000);
+    document.addEventListener('visibilitychange',check);
+    return ()=>{stopped=true;window.clearInterval(timer);document.removeEventListener('visibilitychange',check);};
+  },[]);
+  const dismiss=()=>{try{localStorage.setItem(IOS_BANNER_KEY,String(Date.now()+3*86400000));}catch{}setHidden(true);};
+  if(isApp()||!isIOS()||hidden||!state)return null;
+  const issue=iosBannerIssue(state);
+  return issue?{issue,dismiss}:null;
 }
 
 /** iPhone 专用：把「主屏幕安装/系统版本/通知权限/订阅登记」逐项列出来，卡在哪一步一眼看到。 */

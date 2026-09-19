@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {iosPushIssue,iosPushRows,type IosPushState} from '../src/shared/ios-push';
+import {iosBannerIssue,iosPushIssue,iosPushRows,type IosPushState} from '../src/shared/ios-push';
 import {IosPushCheckView} from '../src/ios-notify';
 
 const ok:IosPushState={standalone:true,capable:true,permission:'granted',local:true,server:1,thisDevice:true};
@@ -42,6 +42,19 @@ describe('iosPushIssue',()=>{
     expect(iosPushIssue({...ok,permission:'denied',local:false})).toContain('允许通知');
     expect(iosPushIssue({...ok,local:false,thisDevice:false})).toContain('开启新通知推送');
     expect(iosPushIssue({...ok,thisDevice:false})).toContain('没有同步到服务器');
+  });
+});
+
+describe('iosBannerIssue',()=>{
+  it('一切正常时不弹提示条',()=>{
+    expect(iosBannerIssue(ok)).toBeNull();
+  });
+  it('装到主屏幕但没开推送时弹出提示条',()=>{
+    expect(iosBannerIssue({...ok,permission:'default',local:false,thisDevice:false})).toContain('允许通知');
+    expect(iosBannerIssue({...ok,thisDevice:false})).toContain('没有同步到服务器');
+  });
+  it('还没装到主屏幕时不弹，交给首页的安装引导卡',()=>{
+    expect(iosBannerIssue({...ok,standalone:false,permission:'default',local:false,thisDevice:false})).toBeNull();
   });
 });
 
