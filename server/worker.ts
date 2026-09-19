@@ -35,6 +35,13 @@ async function feedTag(db: D1Database, ...scope: (string|null)[]): Promise<strin
   return `"${row.version}-${(await sha256(JSON.stringify(scope))).slice(0,16)}"`;
 }
 const feedHeaders=(etag: string|null): Record<string,string> => etag?{ETag:etag,'Cache-Control':FEED_CACHE}:{};
+/** RFC 9110 的 If-None-Match 用弱比较：边缘节点会把 ETag 弱化成 W/"…" 再下发，逐字符比会永远不命中。 */
+const ifNoneMatch=(request: Request, tag: string) => {
+  const raw=request.headers.get('If-None-Match');
+  if(!raw)return false;
+  if(raw.trim()==='*')return true;
+  return raw.split(',').some(value=>value.trim().replace(/^W\//,'')===tag);
+};
 // private：只允许浏览器自己缓存，不让 CDN 或中间代理留副本；no-cache：每次都回来校验 ETag，所以通知不会延迟。
 const FEED_CACHE='private, no-cache';
 /** 命中缓存时不带正文返回，客户端直接复用上一次的列表。 */
@@ -273,7 +280,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   if(path==='/api/notices'&&method==='GET'){
     const category=url.searchParams.get('category'),q=url.searchParams.get('q');
     const etag=await feedTag(env.DB,'public',category,q);
-    if(etag&&request.headers.get('If-None-Match')===etag)return notModified(etag);
+    if(etag&&ifNoneMatch(request,etag))return notModified(etag);
     const clauses=["status='published'"],args: string[]=[];
     if(category&&categories.includes(category as any)){clauses.push('category=?');args.push(category);}
     if(q){clauses.push('(title LIKE ? OR body LIKE ?)');args.push(`%${q.slice(0,100)}%`,`%${q.slice(0,100)}%`);}
@@ -313,7 +320,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   }
   if(path==='/api/admin/notices'&&method==='GET'){
     const etag=await feedTag(env.DB,'admin');
-    if(etag&&request.headers.get('If-None-Match')===etag)return notModified(etag);
+    if(etag&&ifNoneMatch(request,etag))return notModified(etag);
     const result=await env.DB.prepare('SELECT * FROM notices ORDER BY created_at DESC LIMIT 500').all();
     return json({notices:result.results.map(r=>mapNotice(r,true))},200,feedHeaders(etag));
   }
