@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {byUrgency,effectiveEnd,isExpired,countdown,dayKey} from '../src/shared/dates';
+import {byUrgency,effectiveEnd,isExpired,countdown,dayKey,formatCompact,relativeDayLabel} from '../src/shared/dates';
 
 const NOW=Date.parse('2026-09-19T12:00:00+08:00');
 const base={published_at:'2026-09-01T00:00:00.000Z',created_at:'2026-09-01T00:00:00.000Z'};
@@ -26,7 +26,7 @@ describe('byUrgency',()=>{
     const list=[none,later,soon];
     expect([...list].sort((a,b)=>byUrgency(a,b,NOW)).map(n=>n.title)).toEqual(['快到期','还早','长期']);
   });
-  it('活动时间也参与排序',()=>{
+  it('开始时间也参与排序',()=>{
     const event=make('活动','', '2026-09-19T18:00:00+08:00');
     const deadline=make('截止','2026-09-21T10:00:00+08:00');
     expect([deadline,event].sort((a,b)=>byUrgency(a,b,NOW)).map(n=>n.title)).toEqual(['活动','截止']);
@@ -52,14 +52,14 @@ describe('byUrgency',()=>{
     expect([plainDone,pinnedDone,soonTodo,pinnedTodo].sort((a,b)=>byUrgency(a,b,NOW,doneIds)).map(n=>n.title))
       .toEqual(['置顶未完成','快到期未完成','置顶已完成','普通已完成']);
   });
-  it('截止时间优先于活动时间（沿用 effectiveEnd 规则）',()=>{
+  it('截止时间优先于开始时间（沿用 effectiveEnd 规则）',()=>{
     const n=make('两者都有','2026-09-21T10:00:00+08:00','2026-09-20T10:00:00+08:00');
     expect(effectiveEnd(n)).toBe(n.deadline_at);
   });
 });
 
 describe('日期工具',()=>{
-  it('isExpired 以截止/活动时间判断',()=>{
+  it('isExpired 以截止/开始时间判断',()=>{
     expect(isExpired(make('过期','2026-09-10T10:00:00+08:00'),NOW)).toBe(true);
     expect(isExpired(make('进行中','2026-09-20T10:00:00+08:00'),NOW)).toBe(false);
     expect(isExpired(make('长期',''),NOW)).toBe(false);
@@ -73,5 +73,17 @@ describe('日期工具',()=>{
   it('dayKey 按北京时间分日',()=>{
     expect(dayKey('2026-09-18T16:30:00.000Z')).toBe('2026-09-19');
     expect(dayKey('2026-09-18T15:30:00.000Z')).toBe('2026-09-18');
+  });
+  it('relativeDayLabel 只给今天/明天/后天',()=>{
+    expect(relativeDayLabel('2026-09-19',NOW)).toBe('今天');
+    expect(relativeDayLabel('2026-09-20',NOW)).toBe('明天');
+    expect(relativeDayLabel('2026-09-21',NOW)).toBe('后天');
+    expect(relativeDayLabel('2026-09-22',NOW)).toBe('');
+    expect(relativeDayLabel('2026-09-18',NOW)).toBe('');
+    expect(relativeDayLabel('2026-09-19T18:00:00+08:00',NOW)).toBe('今天');
+  });
+  it('formatCompact 用「9/20 18:00」这类短写法',()=>{
+    expect(formatCompact(null)).toBe('');
+    expect(formatCompact('2026-09-20T10:00:00.000Z')).toBe('9/20 18:00');
   });
 });

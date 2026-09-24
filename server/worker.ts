@@ -134,7 +134,8 @@ function buildCalendar(notices:Record<string,unknown>[],origin:string):string {
     for(const [kind,date] of [['event_at',n.event_at],['deadline_at',n.deadline_at]] as const){
       if(typeof date!=='string')continue;
       const start=icsTime(date),end=icsTime(new Date(Date.parse(date)+3600000).toISOString());
-      lines.push('BEGIN:VEVENT',`UID:notice-${n.id}-${kind}@classboard`,`DTSTAMP:${icsTime(String(n.published_at||n.created_at||new Date().toISOString()))}`,`DTSTART:${start}`,`DTEND:${end}`,`SUMMARY:【${n.category}】${icsEscape(String(n.title))}`,`DESCRIPTION:${icsEscape(String(n.body).slice(0,800))}`,`URL:${origin}/`);
+      const kindLabel=kind==='event_at'?'开始':'截止';
+      lines.push('BEGIN:VEVENT',`UID:notice-${n.id}-${kind}@classboard`,`DTSTAMP:${icsTime(String(n.published_at||n.created_at||new Date().toISOString()))}`,`DTSTART:${start}`,`DTEND:${end}`,`SUMMARY:【${n.category}】${icsEscape(String(n.title))}（${kindLabel}）`,`DESCRIPTION:${icsEscape(String(n.body).slice(0,800))}`,`URL:${origin}/`);
       if(n.location)lines.push(`LOCATION:${icsEscape(String(n.location))}`);
       lines.push('END:VEVENT');
     }
@@ -355,10 +356,29 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(!result[0].meta.changes)fail(409,'通知已被更新或已归档，请刷新后重试');
     return json({ok:true});
   }
-  const action=path.match(/^\/api\/admin\/notices\/([\w-]+)\/(publish|reject|archive)$/);
+  const action=path.match(/^\/api\/admin\/notices\/([\w-]+)\/(publish|reject|archive|restore)$/);
   if(action&&method==='POST'){
     const body=await readBody(request),now=new Date().toISOString();
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
+    // 撤销归档回到「已发布」并按新发布对待（排序到最前并重新推送）；撤销驳回只回到待审核，不推送。
+    if(action[2]==='restore'){
+      const row=await env.DB.prepare('SELECT n.status AS status,u.position AS author_position FROM notices n LEFT JOIN users u ON u.id=n.author_id WHERE n.id=?').bind(action[1]).first<{status:string;author_position:string|null}>();
+      if(!row)fail(404,'通知不存在');
+      if(!['archived','rejected'].includes(row.status))fail(409,'只有已归档或已驳回的通知可以撤销');
+      if(!canManageNotice(admin.position,row.author_position))fail(403,'这条通知由班长或团支书发布，仅班长或团支书可以撤销');
+      const back=row.status==='archived'?'published':'pending';
+      const results=await env.DB.batch([
+        env.DB.prepare('UPDATE notices SET status=?,published_at=CASE WHEN ?=\'published\' THEN ? ELSE published_at END,updated_at=?,version=version+1 WHERE id=? AND version=? AND status=?').bind(back,back,now,now,action[1],body.version as number,row.status),
+        env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,row.status==='archived'?'撤销归档':'撤销驳回',now,action[1],Number(body.version)+1,now),
+        bumpFeed(env.DB)
+      ]);
+      if(!results[0].meta.changes)fail(409,'通知状态已变化，请刷新后重试');
+      if(back==='published'){
+        const notice=await env.DB.prepare('SELECT id,title,category,body FROM notices WHERE id=?').bind(action[1]).first<{id:string;title:string;category:string;body:string}>();
+        if(notice)deferPush(ctx,env,notice);
+      }
+      return json({ok:true});
+    }
     const status=action[2]==='publish'?'published':action[2]==='reject'?'rejected':'archived';
     const old=action[2]==='archive'?'published':'pending';
     const label=action[2]==='publish'?'审核通过':action[2]==='reject'?'驳回':'归档';

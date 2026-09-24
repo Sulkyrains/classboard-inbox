@@ -187,5 +187,30 @@ try{
   leadFeed=await(await call('/notices')).json();
   assert.ok(leadFeed.notices.some(n=>n.id===leadId));
   assert.ok(!leadFeed.notices.some(n=>n.id===memberId||n.id===peerId));   // 归档后对所有人（含同学）都从看板消失
-  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级。');
+  // ---- 撤销归档 / 撤销驳回：归档→已发布（重新推送），驳回→待审核；权限与乐观锁与归档一致 ----
+  const readNotice=async id=>db.prepare('SELECT status,published_at,version FROM notices WHERE id=?').bind(id).first();
+  await db.prepare("UPDATE notices SET status='archived',version=version+1,updated_at=? WHERE id=?").bind(new Date().toISOString(),leadId).run();
+  const archivedLead=await readNotice(leadId);
+  cookie=memberCookie;
+  assert.equal((await call('/admin/notices/'+leadId+'/restore','POST',{version:archivedLead.version})).status,403);   // 委员不能撤销班长发布的通知
+  assert.equal((await readNotice(leadId)).status,'archived');
+  cookie=leadCookie;
+  assert.equal((await call('/admin/notices/'+leadId+'/restore','POST',{version:archivedLead.version+7})).status,409); // 版本冲突
+  assert.equal((await call('/admin/notices/'+leadId+'/restore','POST',{version:archivedLead.version})).status,200);
+  const restoredLead=await readNotice(leadId);
+  assert.equal(restoredLead.status,'published');
+  assert.ok(restoredLead.published_at>archivedLead.published_at);    // 重新发布，排序回到最前
+  assert.equal(restoredLead.version,archivedLead.version+1);
+  assert.ok((await(await call('/notices')).json()).notices.some(n=>n.id===leadId));   // 重新出现在所有人看板
+  assert.equal((await call('/admin/notices/'+leadId+'/restore','POST',{version:restoredLead.version})).status,409);   // 已发布不能再撤销
+  await db.prepare("UPDATE notices SET status='rejected',version=version+1,updated_at=? WHERE id=?").bind(new Date().toISOString(),peerId).run();
+  const rejectedPeer=await readNotice(peerId);
+  cookie=memberCookie;
+  assert.equal((await call('/admin/notices/'+peerId+'/restore','POST',{version:rejectedPeer.version})).status,200);    // 自己被驳回的草稿可以撤销
+  const restoredPeer=await readNotice(peerId);
+  assert.equal(restoredPeer.status,'pending');
+  assert.ok(!(await(await call('/notices')).json()).notices.some(n=>n.id===peerId));   // 回到待审核，不对外可见
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销归档'").bind(leadId).first()).n,1);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销驳回'").bind(peerId).first()).n,1);
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级。');
 }finally{await mf.dispose();}

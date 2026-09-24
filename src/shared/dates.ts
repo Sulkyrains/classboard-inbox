@@ -6,12 +6,23 @@ export function formatDate(value: string | null, full = false): string {
   if (!value) return '未设置';
   return new Intl.DateTimeFormat('zh-CN', { timeZone: TIMEZONE, ...(full ? { year: 'numeric' as const } : {}), month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
 }
+/** 比今天近的日子给个口语标签，日程里比「9/26」更好认。 */
+export function relativeDayLabel(value: string | Date, now = Date.now()): string {
+  const key = dayKey(value), today = dayKey(new Date(now));
+  if (key === today) return '今天';
+  const diff = Math.round((Date.parse(key) - Date.parse(today)) / 86400000);
+  return diff === 1 ? '明天' : diff === 2 ? '后天' : '';
+}
+export function formatCompact(value: string | null): string {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: TIMEZONE, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
+}
 export function effectiveEnd(n: {deadline_at: string | null; event_at: string | null}) { return n.deadline_at || n.event_at; }
 export function isExpired(n: {deadline_at: string | null; event_at: string | null}, now = Date.now()) {
   const end = effectiveEnd(n); return !!end && new Date(end).getTime() < now;
 }
 type Sortable = {deadline_at: string | null; event_at: string | null; published_at: string | null; created_at: string; pinned?: boolean; id?: string};
-/** 已完成的整体沉到未完成之后（置顶的也一样）；其余按截止/活动时间快到的排最前，没有时间限制的按发布时间倒序居中，已经过期的沉底；置顶在各自分组内排最前。 */
+/** 已完成的整体沉到未完成之后（置顶的也一样）；其余按截止/开始时间快到的排最前，没有时间限制的按发布时间倒序居中，已经过期的沉底；置顶在各自分组内排最前。 */
 export function byUrgency(a: Sortable, b: Sortable, now = Date.now(), done?: ReadonlySet<string>): number {
   const aDone = !!a.id && !!done?.has(a.id), bDone = !!b.id && !!done?.has(b.id);
   if (aDone !== bDone) return aDone ? 1 : -1;
