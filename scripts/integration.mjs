@@ -267,5 +267,75 @@ try{
   assert.deepEqual(ops.filter(o=>o.notice_id===doomedId).map(o=>o.action),['删除','发布']);
   // 老表 audit_log 不再写入（历史行由 0009 迁移回填到 operation_log）
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM audit_log').first()).n,0);
-  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级、班长永久删除与已读级联清理、班长专用操作日志（含删除留痕与越权 403）。');
+  // ---- 账号管理（仅班长）：激活进度与使用情况、重置密码（一次性临时密码）、强制下线 ----
+  const student2Id=(await db.prepare('SELECT id FROM users WHERE student_id=?').bind('integration-student2').first()).id;
+  const student2Again2=await call('/login','POST',{student_id:'integration-student2',name:'测试同学二号',password:secret});
+  assert.equal(student2Again2.status,200);
+  const student2Cookie=student2Again2.headers.get('Set-Cookie').split(';')[0];
+  const accountsCall=async who=>{cookie=who;const r=await call('/admin/accounts');return {status:r.status,body:await r.json().catch(()=>({}))};};
+  for(const who of [memberCookie,secretaryCookie,student2Cookie]){
+    cookie=who;
+    assert.equal((await call('/admin/accounts')).status,403);                                  // 委员、团支书、同学都看不到
+    assert.equal((await call('/admin/accounts/'+student2Id+'/reset-password','POST',{})).status,403);
+    assert.equal((await call('/admin/accounts/'+student2Id+'/logout-all','POST',{})).status,403);
+  }
+  const logCount=async()=>(await db.prepare('SELECT COUNT(*) AS n FROM account_log').first()).n;
+  const logsAt=await logCount();
+  assert.equal(logsAt,0);
+  cookie=leadCookie;
+  const leadAccounts=await accountsCall(leadCookie);
+  assert.equal(leadAccounts.status,200);
+  const target=leadAccounts.body.accounts.find(a=>a.id===student2Id);
+  assert.ok(target,'列表应包含同学账号');
+  assert.equal(target.display_name,'测试同学二号');assert.equal(target.must_change_password,false);
+  assert.ok(target.last_login_at,'登录过就应有最后登录时间');
+  assert.ok(target.sessions>=1,'刚登录过应至少有一台在线设备');
+  assert.equal(leadAccounts.body.accounts[0].role,'committee');                                // 班委排在同学前面
+  assert.equal(leadAccounts.body.accounts.length,(await db.prepare('SELECT COUNT(*) AS n FROM users').first()).n);
+  assert.ok(!JSON.stringify(leadAccounts.body).includes('digest')&&!JSON.stringify(leadAccounts.body).includes('salt'),'散列不能出现在接口里');
+  cookie=leadCookie;
+  assert.equal((await call('/admin/accounts/not-a-real-id/reset-password','POST',{})).status,404);
+  cookie=memberCookie;
+  await call('/admin/accounts/'+student2Id+'/reset-password','POST',{});                        // 被拒绝的那一次
+  assert.equal(await logCount(),logsAt,'越权尝试不应留下账号操作记录');
+  // 班长重置：返回一次性临时密码，旧会话立即失效，旧密码作废，本人必须改成自己的密码
+  const digestBefore=(await db.prepare('SELECT digest FROM users WHERE id=?').bind(student2Id).first()).digest;
+  cookie=leadCookie;
+  const reset=await call('/admin/accounts/'+student2Id+'/reset-password','POST',{});
+  assert.equal(reset.status,200);
+  const resetBody=await reset.json();
+  assert.match(resetBody.password,/^[A-Za-z2-9]{10}$/);
+  assert.ok(!/[0O1lI]/.test(resetBody.password),'临时密码不含易混字符');
+  assert.ok(!JSON.stringify(resetBody).includes('digest'),'重置响应里不能带散列');
+  assert.ok(resetBody.devices>=1,'重置时应收割在线设备');
+  const afterReset=await db.prepare('SELECT digest,must_change_password FROM users WHERE id=?').bind(student2Id).first();
+  assert.notEqual(afterReset.digest,digestBefore);assert.equal(afterReset.must_change_password,1);
+  cookie=student2Cookie;assert.equal((await call('/notices')).status,401);                      // 旧会话已失效
+  assert.equal((await call('/login','POST',{student_id:'integration-student2',name:'测试同学二号',password:secret})).status,401);
+  const tempLogin=await call('/login','POST',{student_id:'integration-student2',name:'测试同学二号',password:resetBody.password});
+  assert.equal(tempLogin.status,200);assert.equal((await tempLogin.json()).user.must_change_password,true);
+  cookie=tempLogin.headers.get('Set-Cookie').split(';')[0];
+  assert.equal((await call('/notices')).status,403);                                            // 改密之前业务接口不放行
+  const ownSecret=randomBytes(12).toString('hex');
+  const ownChanged=await call('/account/password','POST',{current_password:resetBody.password,new_password:ownSecret});
+  assert.equal(ownChanged.status,200);assert.equal((await ownChanged.json()).user.must_change_password,false);
+  const ownCookie=ownChanged.headers.get('Set-Cookie').split(';')[0];   // 首次改密换发新会话
+  cookie=ownCookie;
+  assert.equal((await call('/notices')).status,200);
+  // 强制下线：密码不变，只让设备掉线（手机丢了或账号借给别人用完之后）
+  cookie=leadCookie;
+  const kick=await call('/admin/accounts/'+student2Id+'/logout-all','POST',{});assert.equal(kick.status,200);
+  assert.ok((await kick.json()).revoked>=1);
+  cookie=ownCookie;assert.equal((await call('/notices')).status,401);
+  assert.equal((await call('/login','POST',{student_id:'integration-student2',name:'测试同学二号',password:ownSecret})).status,200);
+  // 留痕：最新排最前，只记动作不记密码
+  cookie=leadCookie;
+  const accountLog=(await(await call('/admin/accounts')).json()).log;
+  assert.equal(accountLog.length,2);
+  assert.equal(accountLog[0].action,'强制下线');assert.equal(accountLog[1].action,'重置密码');
+  assert.equal(accountLog[1].account_label,'测试同学二号（integration-student2）');
+  assert.equal(accountLog[1].actor_name,'测试班长');assert.equal(accountLog[1].actor_position,'班长');
+  assert.ok(accountLog[1].detail.includes('会话'));
+  assert.ok(!JSON.stringify(accountLog).includes(resetBody.password),'临时密码不能出现在记录里');
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级、班长永久删除与已读级联清理、班长专用操作日志（含删除留痕与越权 403）、班长账号管理（使用情况、一次性临时密码重置、强制下线与留痕，越权 403）。');
 }finally{await mf.dispose();}

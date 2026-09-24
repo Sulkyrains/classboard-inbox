@@ -1,5 +1,6 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
 import { canDeleteNotice, canManageNotice } from '../src/shared/roles';
+import { randomTempPassword } from '../src/shared/accounts';
 import { changedLabels } from '../src/shared/ops';
 import { hashPassword, sha256, verifyPassword, ITERATIONS } from './auth';
 import { parseMessages } from '../src/parser';
@@ -184,7 +185,9 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const authenticated=await env.DB.batch([
       env.DB.prepare('INSERT INTO user_sessions(id_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND digest=?').bind(await sha256(id),now+SESSION_MS,row.id,row.digest),
       env.DB.prepare('DELETE FROM user_sessions WHERE expires_at<?').bind(now),
-      env.DB.prepare('DELETE FROM login_attempts WHERE bucket=? OR expires_at<?').bind(bucket,now)
+      env.DB.prepare('DELETE FROM login_attempts WHERE bucket=? OR expires_at<?').bind(bucket,now),
+      // 账号管理页的「最后一次登录」：与建会话同一个批次，登录失败时不会写入。
+      env.DB.prepare('UPDATE users SET last_login_at=? WHERE id=?').bind(new Date(now).toISOString(),row.id)
     ]);
     if(!authenticated[0].meta.changes)fail(401,'账号状态已变更，请重新登录');
     return json({user:{id:row.id,student_id:row.student_id,display_name:row.display_name,role:row.role,position:row.position,must_change_password:!!row.must_change_password}},200,{'Set-Cookie':cookie(request,id,SESSION_SECONDS)});
@@ -345,6 +348,47 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const limit=Math.min(200,Math.max(1,Number(url.searchParams.get('limit'))||100));
     const result=await env.DB.prepare('SELECT id,notice_id,notice_title,actor_name,actor_position,action,detail,created_at FROM operation_log ORDER BY created_at DESC,rowid DESC LIMIT ?').bind(limit).all();
     return json({operations:result.results});
+  }
+  // 账号管理页：只有班长能看能改。重置密码等于接管别人的账号，比删除通知更敏感，
+  // 所以连列表也不给团支书看（通知管理那边团支书还有份）。
+  if(path==='/api/admin/accounts'&&method==='GET'){
+    if(admin.position!=='班长')fail(403,'只有班长可以管理账号');
+    // 学号、姓名、散列都在库里；这里只取管理需要的列，salt/digest 绝不出接口。
+    const result=await env.DB.prepare(`SELECT u.id,u.student_id,u.display_name,u.role,u.position,u.must_change_password,u.created_at,u.last_login_at,
+      (u.calendar_token IS NOT NULL) AS has_calendar,
+      (SELECT COUNT(*) FROM user_sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS sessions,
+      (SELECT COUNT(*) FROM push_subscriptions p WHERE p.user_id=u.id) AS push_subs,
+      (SELECT COUNT(*) FROM notice_reads r WHERE r.user_id=u.id) AS reads
+      FROM users u ORDER BY CASE WHEN u.role='committee' THEN 0 ELSE 1 END,u.student_id`).bind(Date.now()).all<Record<string,unknown>>();
+    const log=await env.DB.prepare('SELECT id,account_label,actor_name,actor_position,action,detail,created_at FROM account_log ORDER BY created_at DESC,rowid DESC LIMIT 50').all();
+    return json({accounts:result.results.map(r=>({...r,must_change_password:!!r.must_change_password,has_calendar:!!r.has_calendar})),log:log.results});
+  }
+  const accountPath=path.match(/^\/api\/admin\/accounts\/([\w-]+)\/(reset-password|logout-all)$/);
+  if(accountPath&&method==='POST'){
+    if(admin.position!=='班长')fail(403,'只有班长可以管理账号');
+    const target=await env.DB.prepare('SELECT id,student_id,display_name FROM users WHERE id=?').bind(accountPath[1]).first<{id:string;student_id:string;display_name:string}>();
+    if(!target)fail(404,'账号不存在');
+    const now=new Date(),nowIso=now.toISOString();
+    const label=`${target.display_name}（${target.student_id}）`;
+    const sessions=await env.DB.prepare('SELECT COUNT(*) AS n FROM user_sessions WHERE user_id=?').bind(target.id).first<{n:number}>();
+    const devices=sessions?.n||0;
+    if(accountPath[2]==='reset-password'){
+      const tries=await attempt(env.DB,await sha256('reset:'+admin.id),now.getTime()).first<{attempts:number}>();
+      if(tries&&tries.attempts>30)return json({error:'重置操作过于频繁，请在 15 分钟后重试'},429,{'Retry-After':'900'});
+      // 明文密码只在这一条响应里出现一次：不写日志、不落库、不进静态资源。
+      const secret=randomTempPassword(),salt=crypto.randomUUID(),digest=await hashPassword(secret,salt);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE users SET salt=?,digest=?,must_change_password=1 WHERE id=?').bind(salt,digest,target.id),
+        env.DB.prepare('DELETE FROM user_sessions WHERE user_id=?').bind(target.id),
+        env.DB.prepare('INSERT INTO account_log(id,account_id,account_label,actor_id,actor_name,actor_position,action,detail,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),target.id,label,admin.id,admin.display_name,admin.position||'','重置密码',devices?`已注销 ${devices} 个会话`:'' ,nowIso)
+      ]);
+      return json({ok:true,password:secret,devices,account:{id:target.id,display_name:target.display_name,student_id:target.student_id}});
+    }
+    const result=await env.DB.batch([
+      env.DB.prepare('DELETE FROM user_sessions WHERE user_id=?').bind(target.id),
+      env.DB.prepare('INSERT INTO account_log(id,account_id,account_label,actor_id,actor_name,actor_position,action,detail,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),target.id,label,admin.id,admin.display_name,admin.position||'','强制下线',devices?`注销 ${devices} 个会话`:'本来就没有在线设备',nowIso)
+    ]);
+    return json({ok:true,revoked:result[0].meta.changes||0,account:{id:target.id,display_name:target.display_name,student_id:target.student_id}});
   }
   if(path==='/api/admin/notices'&&method==='POST'){
     const body=await readBody(request),n=validate(body),id=crypto.randomUUID(),now=new Date().toISOString();

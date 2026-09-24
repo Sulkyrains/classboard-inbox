@@ -173,6 +173,51 @@
 :root[data-theme=dark] .op-badge.ok{background:#16352c;color:#71c8a8}
 :root[data-theme=dark] .op-badge.warn{background:#3a2d17;color:#d9ab5e}
 :root[data-theme=dark] .op-badge.danger{background:#3a1f22;color:#ff9b9b}
+/* 账号管理（仅班长可见）：统计、筛选、账号列表与一次性临时密码 */
+.account-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.account-stats>div{border:1px solid var(--line);background:white;border-radius:12px;padding:15px 17px}
+.account-stats span{font-size:11px;color:#8c9eb8;display:block}
+.account-stats strong{font-size:25px;font-weight:650;color:#2c3d5b;display:block;margin-top:6px;letter-spacing:-.5px}
+.account-stats strong.pending{color:#b3761c}
+.account-stats small{font-size:11px;font-weight:400;color:#a1acbd;margin-left:2px}
+.account-hint{margin:-6px 0 16px;font-size:12px;background:#eef6f1;border:1px solid #cfe8da;color:#2f7d55;border-radius:9px;padding:10px 13px;line-height:1.7}
+.account-filters .text-link{display:flex;align-items:center;gap:5px}
+.account-list{display:flex;flex-direction:column;gap:10px}
+.account-row{display:grid;grid-template-columns:42px minmax(130px,1.05fr) auto minmax(200px,1.6fr) auto;gap:14px;align-items:center;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:white}
+.account-row.is-pending{border-color:#f0dfc0;background:#fffdf7}
+.account-avatar{height:38px;width:38px;border-radius:11px;display:grid;place-items:center;font-size:14px;background:#eef2f8;color:#7e8da7}
+.account-avatar.committee{background:#e7edfc;color:#4770ca}
+.account-identity{min-width:0}
+.account-identity strong{font-size:14px;font-weight:600;color:#31425f;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.account-identity em{font-style:normal;font-size:10px;background:#eaf1ff;color:#4a72cc;border-radius:5px;padding:2px 6px;font-weight:500;white-space:nowrap}
+.account-identity>span{display:block;font-size:11px;color:#9aa8bf;margin-top:5px}
+.account-state{font-size:11px;padding:4px 10px;border-radius:999px;white-space:nowrap;background:#e6f4ec;color:#2f7d55;justify-self:start}
+.account-state.pending{background:#fdf2de;color:#b3761c}
+.account-meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11px;color:#94a2b8}
+.account-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.account-actions button{display:flex;align-items:center;gap:5px;font-size:11px;color:#6c8ac0;border:1px solid #e1e7f1;background:white;border-radius:7px;padding:8px 11px;min-height:34px}
+.account-actions button:hover:not(:disabled){background:#f3f7ff}
+.account-actions button:disabled{color:#c2cbd9;cursor:not-allowed;opacity:.7}
+.secret-box{display:flex;align-items:center;gap:12px;margin:18px 0;background:#f6f8fc;border:1px dashed #c9d8f2;border-radius:10px;padding:14px 16px;flex-wrap:wrap}
+.secret-box code{font-size:22px;letter-spacing:2px;font-weight:600;color:#2b4b8f;font-family:ui-monospace,Consolas,monospace;flex:1;min-width:0;overflow-wrap:anywhere}
+@media(max-width:900px){.account-row{grid-template-columns:38px 1fr auto;grid-template-areas:"avatar identity state" "meta meta meta" "actions actions actions";row-gap:11px}.account-avatar{grid-area:avatar}.account-identity{grid-area:identity}.account-state{grid-area:state}.account-meta{grid-area:meta}.account-actions{grid-area:actions;justify-content:flex-start}}
+@media(max-width:640px){.account-stats{grid-template-columns:1fr 1fr;gap:10px}.account-actions button{font-size:12px;min-height:36px;flex:1;justify-content:center}.secret-box code{font-size:19px}}
+:root[data-theme=dark] .account-row,:root[data-theme=dark] .account-stats>div{background:#111d36;border-color:#22304e}
+:root[data-theme=dark] .account-row.is-pending{background:#1a1710;border-color:#4a3c1f}
+:root[data-theme=dark] .account-avatar{background:#1b2745;color:#93a5c4}
+:root[data-theme=dark] .account-avatar.committee{background:#1c2b50;color:#8fb0f5}
+:root[data-theme=dark] .account-identity strong{color:#c8d6ef}
+:root[data-theme=dark] .account-identity em{background:#1c2b50;color:#8fb0f5}
+:root[data-theme=dark] .account-identity>span,:root[data-theme=dark] .account-meta,:root[data-theme=dark] .account-stats span{color:#8395b3}
+:root[data-theme=dark] .account-stats strong{color:#c3d2ec}
+:root[data-theme=dark] .account-stats strong.pending{color:#d9ab5e}
+:root[data-theme=dark] .account-state{background:#16352c;color:#71c8a8}
+:root[data-theme=dark] .account-state.pending{background:#3a2d17;color:#d9ab5e}
+:root[data-theme=dark] .account-actions button{border-color:#2a3a5c;background:#111d36;color:#9db1d4}
+:root[data-theme=dark] .account-actions button:hover:not(:disabled){background:#182647}
+:root[data-theme=dark] .account-hint{background:#16352c;border-color:#245c4a;color:#71c8a8}
+:root[data-theme=dark] .secret-box{background:#0f1930;border-color:#2c4272}
+:root[data-theme=dark] .secret-box code{color:#9db9f0}
 :root[data-theme=dark] .notify-check-head strong{color:#b9c9e4}
 :root[data-theme=dark] .notify-version{color:#8395b3}
 :root[data-theme=dark] .notify-rows em{color:#a9bad6}
