@@ -159,5 +159,33 @@ try{
   assert.equal((await call('/admin/parse','POST',{text:'作业明天交',referenceDate:'2026-09-09T10:00:00+08:00'})).status,401);
   for(let i=0;i<8;i++)assert.equal((await call('/login','POST',{student_id:'unknown',name:'未知',password:secret})).status,401);
   assert.equal((await call('/login','POST',{student_id:'unknown',name:'未知',password:secret})).status,429);
-  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效。');
+  // ---- 职位与权限分级：主要班委（班长/团支书）不受限，其他委员不能归档或编辑主要班委发布的通知 ----
+  const committeeLogin=async(id,name,position)=>{const s=randomBytes(16).toString('hex');await db.prepare("INSERT INTO users(id,student_id,display_name,role,position,salt,digest,created_at,must_change_password) VALUES(?,?,?,'committee',?,?,?,?,0)").bind(randomUUID(),id,name,position,s,pbkdf2Sync(secret,s,100000,32,'sha256').toString('hex'),new Date().toISOString()).run();const r=await call('/login','POST',{student_id:id,name,password:secret});assert.equal(r.status,200);assert.equal((await r.json()).user.position,position);cookie=r.headers.get('Set-Cookie').split(';')[0];return cookie;};
+  const leadCookie=await committeeLogin('integration-lead','测试班长','班长');
+  const memberCookie=await committeeLogin('integration-member','测试学习委员','学习委员');
+  await committeeLogin('integration-peer','测试文体委员','文体委员');
+  const peerCookie=cookie;
+  assert.equal((await(await call('/session')).json()).user.position,'文体委员');
+  const publish=async title=>{const r=await call('/admin/notices','POST',{...fresh,title});assert.equal(r.status,201);return (await r.json()).id;};
+  cookie=leadCookie;
+  const leadId=await publish('班长发布的通知');
+  cookie=memberCookie;
+  const memberId=await publish('学习委员发布的通知');    // 委员自行发布免审核，201 即为已发布
+  let leadFeed=await(await call('/notices')).json();
+  const leadPublic=leadFeed.notices.find(n=>n.id===leadId);
+  assert.equal(leadPublic.author_name,'测试班长');assert.equal(leadPublic.author_position,'班长');assert.equal(leadPublic.author_id,undefined);
+  assert.equal((await call('/admin/notices/'+leadId,'PUT',{...fresh,title:'偷改班长的通知',version:1})).status,403);
+  assert.equal((await call('/admin/notices/'+leadId+'/archive','POST',{version:1})).status,403);
+  assert.ok((await(await call('/notices')).json()).notices.some(n=>n.id===leadId));    // 被拒后通知仍然发布中
+  assert.equal((await call('/admin/notices/'+memberId,'PUT',{...fresh,pinned:true,version:1})).status,200);   // 自己发布的可以编辑
+  cookie=peerCookie;
+  const peerId=await publish('文体委员发布的通知');
+  cookie=memberCookie;
+  assert.equal((await call('/admin/notices/'+peerId+'/archive','POST',{version:1})).status,200);              // 委员之间可以互相归档
+  cookie=leadCookie;
+  assert.equal((await call('/admin/notices/'+memberId+'/archive','POST',{version:2})).status,200);            // 班长可以归档委员的
+  leadFeed=await(await call('/notices')).json();
+  assert.ok(leadFeed.notices.some(n=>n.id===leadId));
+  assert.ok(!leadFeed.notices.some(n=>n.id===memberId||n.id===peerId));   // 归档后对所有人（含同学）都从看板消失
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级。');
 }finally{await mf.dispose();}

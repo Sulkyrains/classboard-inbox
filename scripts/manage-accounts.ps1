@@ -1,11 +1,12 @@
-param([string]$Roster,[string]$Committee,[string]$Reset,[switch]$Reissue,[switch]$Status,[switch]$Remote)
+param([string]$Roster,[string]$Committee,[string]$Reset,[string]$Positions,[switch]$Reissue,[switch]$Status,[switch]$Remote)
 $ErrorActionPreference='Stop'
-if (!$Status -and !$Reissue -and !$Reset -and (!$Roster -or !$Committee)) { throw 'Provide Roster and Committee, or Reset student number, or Reissue, or Status' }
+if (!$Status -and !$Reissue -and !$Reset -and !$Positions -and (!$Roster -or !$Committee)) { throw 'Provide Roster and Committee, or Positions, or Reset student number, or Reissue, or Status' }
 
 $taskArgs = @('scripts/accounts.mjs')
 if ($Status) { $taskArgs += '--status' }
 elseif ($Reissue) { $taskArgs += '--reissue' }
 elseif ($Reset) { $taskArgs += @('--reset',$Reset) }
+elseif ($Positions) { $taskArgs += @('--positions',$Positions) }
 else { $taskArgs += @('--roster',$Roster,'--committee',$Committee) }
 if ($Remote) { $taskArgs += '--remote' }
 

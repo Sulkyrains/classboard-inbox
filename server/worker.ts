@@ -1,4 +1,5 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
+import { canManageNotice } from '../src/shared/roles';
 import { hashPassword, sha256, verifyPassword, ITERATIONS } from './auth';
 import { parseMessages } from '../src/parser';
 import { llmAdapter,type LlmEnv } from './llm';
@@ -81,7 +82,7 @@ function requireOrigin(request: Request) {
 async function session(request: Request, db: D1Database): Promise<Admin|null> {
   const id=request.headers.get('Cookie')?.match(/(?:^|;\s*)cb_session=([a-f0-9]{64})(?:;|$)/)?.[1];
   if(!id)return null;
-  const user=await db.prepare('SELECT a.id,a.student_id,a.display_name,a.role,a.must_change_password FROM user_sessions s JOIN users a ON a.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(await sha256(id),Date.now()).first<Admin>();
+  const user=await db.prepare('SELECT a.id,a.student_id,a.display_name,a.role,a.position,a.must_change_password FROM user_sessions s JOIN users a ON a.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(await sha256(id),Date.now()).first<Admin>();
   return user?{...user,must_change_password:!!user.must_change_password}:null;
 }
 function cookie(request: Request, value: string, age: number) {
@@ -107,6 +108,8 @@ function mapNotice(row: Record<string,unknown>, privateFields=false) {
   const { source_text,source_hash,warnings,author_id,reviewed_by,...publicRow }=row;
   return {...publicRow,pinned:!!row.pinned,...(privateFields?{source_text,warnings:JSON.parse(String(warnings||'[]'))}:{})};
 }
+/** 权限判断按作者「当前」职位：以后调整职位，历史通知的管理权同步变化。 */
+const authorPosition=(db: D1Database, id: string)=>db.prepare('SELECT u.position AS position FROM notices n LEFT JOIN users u ON u.id=n.author_id WHERE n.id=?').bind(id).first<{position:string|null}>();
 function pushPayload(notice:{id:string;title:string;category:string;body:string}): PushPayload {
   return { title:`【${notice.category}】${notice.title}`,body:notice.body.replace(/\s+/g,' ').slice(0,140),url:'/',tag:notice.id };
 }
@@ -176,7 +179,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
       env.DB.prepare('DELETE FROM login_attempts WHERE bucket=? OR expires_at<?').bind(bucket,now)
     ]);
     if(!authenticated[0].meta.changes)fail(401,'账号状态已变更，请重新登录');
-    return json({user:{id:row.id,student_id:row.student_id,display_name:row.display_name,role:row.role,must_change_password:!!row.must_change_password}},200,{'Set-Cookie':cookie(request,id,SESSION_SECONDS)});
+    return json({user:{id:row.id,student_id:row.student_id,display_name:row.display_name,role:row.role,position:row.position,must_change_password:!!row.must_change_password}},200,{'Set-Cookie':cookie(request,id,SESSION_SECONDS)});
   }
   if(path==='/api/logout'&&method==='POST'){
     const id=request.headers.get('Cookie')?.match(/(?:^|;\s*)cb_session=([a-f0-9]{64})(?:;|$)/)?.[1];
@@ -284,15 +287,16 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const category=url.searchParams.get('category'),q=url.searchParams.get('q');
     const etag=await feedTag(env.DB,'public',category,q);
     if(etag&&ifNoneMatch(request,etag))return notModified(etag);
-    const clauses=["status='published'"],args: string[]=[];
-    if(category&&categories.includes(category as any)){clauses.push('category=?');args.push(category);}
-    if(q){clauses.push('(title LIKE ? OR body LIKE ?)');args.push(`%${q.slice(0,100)}%`,`%${q.slice(0,100)}%`);}
-    const result=await env.DB.prepare(`SELECT * FROM notices WHERE ${clauses.join(' AND ')} ORDER BY pinned DESC,published_at DESC LIMIT 500`).bind(...args).all();
+    const clauses=["n.status='published'"],args: string[]=[];
+    if(category&&categories.includes(category as any)){clauses.push('n.category=?');args.push(category);}
+    if(q){clauses.push('(n.title LIKE ? OR n.body LIKE ?)');args.push(`%${q.slice(0,100)}%`,`%${q.slice(0,100)}%`);}
+    // author_position 是发布人当前职位，JOIN 后才能让同学看到「团支书 张三」这样的署名。
+    const result=await env.DB.prepare(`SELECT n.*,u.position AS author_position FROM notices n LEFT JOIN users u ON u.id=n.author_id WHERE ${clauses.join(' AND ')} ORDER BY n.pinned DESC,n.published_at DESC LIMIT 500`).bind(...args).all();
     return json({notices:result.results.map(r=>mapNotice(r))},200,feedHeaders(etag));
   }
   const publicDetail=path.match(/^\/api\/notices\/([\w-]+)$/);
   if(publicDetail&&method==='GET'){
-    const row=await env.DB.prepare("SELECT * FROM notices WHERE id=? AND status='published'").bind(publicDetail[1]).first();
+    const row=await env.DB.prepare("SELECT n.*,u.position AS author_position FROM notices n LEFT JOIN users u ON u.id=n.author_id WHERE n.id=? AND n.status='published'").bind(publicDetail[1]).first();
     return row?json({notice:mapNotice(row)}):json({error:'通知不存在或尚未发布'},404);
   }
   if(!path.startsWith('/api/admin/'))return json({error:'接口不存在'},404);
@@ -324,7 +328,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   if(path==='/api/admin/notices'&&method==='GET'){
     const etag=await feedTag(env.DB,'admin');
     if(etag&&ifNoneMatch(request,etag))return notModified(etag);
-    const result=await env.DB.prepare('SELECT * FROM notices ORDER BY created_at DESC LIMIT 500').all();
+    const result=await env.DB.prepare('SELECT n.*,u.position AS author_position FROM notices n LEFT JOIN users u ON u.id=n.author_id ORDER BY n.created_at DESC LIMIT 500').all();
     return json({notices:result.results.map(r=>mapNotice(r,true))},200,feedHeaders(etag));
   }
   if(path==='/api/admin/notices'&&method==='POST'){
@@ -341,6 +345,8 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   if(edit&&method==='PUT'){
     const body=await readBody(request),n=validate(body),now=new Date().toISOString();
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
+    const author=await authorPosition(env.DB,edit[1]);
+    if(author&&!canManageNotice(admin.position,author.position))fail(403,'这条通知由班长或团支书发布，仅班长或团支书可以编辑');
     const result=await env.DB.batch([
       env.DB.prepare("UPDATE notices SET title=?,body=?,category=?,location=?,audience=?,event_at=?,deadline_at=?,pinned=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND status IN ('pending','published')").bind(n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,now,edit[1],body.version as number),
       env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,'编辑',now,edit[1],Number(body.version)+1,now),
@@ -356,6 +362,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const status=action[2]==='publish'?'published':action[2]==='reject'?'rejected':'archived';
     const old=action[2]==='archive'?'published':'pending';
     const label=action[2]==='publish'?'审核通过':action[2]==='reject'?'驳回':'归档';
+    if(action[2]==='archive'){const author=await authorPosition(env.DB,action[1]);if(author&&!canManageNotice(admin.position,author.position))fail(403,'这条通知由班长或团支书发布，仅班长或团支书可以归档');}
     const results=await env.DB.batch([
       env.DB.prepare('UPDATE notices SET status=?,reviewed_by=?,reviewed_at=?,published_at=CASE WHEN ?=\'published\' THEN ? ELSE published_at END,updated_at=?,version=version+1 WHERE id=? AND version=? AND status=?').bind(status,admin.id,now,status,now,now,action[1],body.version as number,old),
       env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,label,now,action[1],Number(body.version)+1,now),
