@@ -116,7 +116,7 @@ function pushPayload(notice:{id:string;title:string;category:string;body:string}
 function pushAvailable(env: Env) { return !!loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY); }
 async function fanOutPush(env: Env, notice:{id:string;title:string;category:string;body:string}) {
   const keys=loadVapid(env.VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY); if(!keys)return;
-  const subject=env.VAPID_SUBJECT||'mailto:classboard-upc@users.noreply.example';
+  const subject=env.VAPID_SUBJECT||'https://classboard-upc.pages.dev/';
   const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions ORDER BY created_at LIMIT 1000').all<{endpoint:string;p256dh:string;auth:string}>();
   const payload=pushPayload(notice),stale:string[]=[];
   await Promise.allSettled(subs.results.map(async sub=>{const ok=await sendPush(sub,payload,keys,subject).catch(()=>true);if(!ok)stale.push(sub.endpoint);}));
@@ -251,7 +251,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(tries&&tries.attempts>5)return json({error:'测试推送太频繁，请在 15 分钟后重试'},429,{'Retry-After':'900'});
     const subs=await env.DB.prepare('SELECT endpoint,p256dh,auth FROM push_subscriptions WHERE user_id=?').bind(user.id).all<{endpoint:string;p256dh:string;auth:string}>();
     if(!subs.results.length)return json({error:'尚未在本设备开启推送'},400);
-    const subject=env.VAPID_SUBJECT||'mailto:classboard-upc@users.noreply.example';
+    const subject=env.VAPID_SUBJECT||'https://classboard-upc.pages.dev/';
     const payload: PushPayload={title:'知可而办 · 测试推送',body:'绑定成功，新的班级通知会第一时间推送到这里。',url:'/',tag:'push-test'};
     const stale:string[]=[];
     await Promise.allSettled(subs.results.map(async sub=>{const ok=await sendPush(sub,payload,keys,subject).catch(()=>true);if(!ok)stale.push(sub.endpoint);}));
