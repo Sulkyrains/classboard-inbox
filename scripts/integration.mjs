@@ -212,5 +212,29 @@ try{
   assert.ok(!(await(await call('/notices')).json()).notices.some(n=>n.id===peerId));   // 回到待审核，不对外可见
   assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销归档'").bind(leadId).first()).n,1);
   assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销驳回'").bind(peerId).first()).n,1);
-  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级。');
+  // ---- 永久删除：只有班长能删；删掉后通知、已读记录与审计记录一起消失，列表缓存立即失效 ----
+  const secretaryCookie=await committeeLogin('integration-secretary','测试团支书','团支书');
+  cookie=leadCookie;
+  const doomedId=await publish('准备删除的测试通知');
+  const doomedVersion=(await readNotice(doomedId)).version;
+  await db.prepare("INSERT INTO notice_reads(user_id,notice_id,state) VALUES(?,?,'read')").bind(studentId,doomedId).run();
+  const beforeDelete=await revalidate('/notices');
+  cookie=memberCookie;
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{version:doomedVersion})).status,403);   // 委员不能删除
+  assert.equal((await readNotice(doomedId)).status,'published');
+  cookie=secretaryCookie;
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{version:doomedVersion})).status,403);   // 团支书同为主要班委，但不能删除
+  assert.equal((await readNotice(doomedId)).status,'published');
+  cookie=leadCookie;
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{version:doomedVersion+5})).status,409); // 版本不符
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{})).status,400);                       // 必须带版本
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{version:doomedVersion})).status,200);
+  assert.equal((await call('/admin/notices/'+doomedId,'DELETE',{version:doomedVersion})).status,404);   // 删过就没了
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM notices WHERE id=?').bind(doomedId).first()).n,0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM notice_reads WHERE notice_id=?').bind(doomedId).first()).n,0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=?').bind(doomedId).first()).n,0);
+  const afterDelete=await revalidate('/notices');assert.notEqual(afterDelete.tag,beforeDelete.tag);
+  assert.ok(!(await(await call('/notices')).json()).notices.some(n=>n.id===doomedId));
+  assert.ok(!(await(await call('/admin/notices')).json()).notices.some(n=>n.id===doomedId));
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级、班长永久删除与已读/审计级联清理。');
 }finally{await mf.dispose();}

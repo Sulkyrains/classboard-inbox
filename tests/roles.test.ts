@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {LEAD_POSITIONS,canManageNotice,isLeadPosition} from '../src/shared/roles';
+import {LEAD_POSITIONS,canDeleteNotice,canManageNotice,isLeadPosition} from '../src/shared/roles';
 
 describe('isLeadPosition',()=>{
   it('只有班长和团支书是主要班委',()=>{
@@ -35,5 +35,19 @@ describe('canManageNotice',()=>{
     expect(canManageNotice('学习委员',null)).toBe(true);
     expect(canManageNotice('学习委员','')).toBe(true);
     expect(canManageNotice('学习委员',undefined)).toBe(true);
+  });
+});
+
+describe('canDeleteNotice',()=>{
+  it('只有班长可以永久删除通知',()=>{
+    expect(canDeleteNotice('班长')).toBe(true);
+  });
+  it('团支书与其他委员都不能删除（归档才是他们能用的手段）',()=>{
+    expect(canDeleteNotice('团支书')).toBe(false);
+    expect(canDeleteNotice('学习委员')).toBe(false);
+    expect(canDeleteNotice('心理委员')).toBe(false);
+    expect(canDeleteNotice('')).toBe(false);
+    expect(canDeleteNotice(null)).toBe(false);
+    expect(canDeleteNotice(undefined)).toBe(false);
   });
 });

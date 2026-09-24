@@ -1,5 +1,5 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
-import { canManageNotice } from '../src/shared/roles';
+import { canDeleteNotice, canManageNotice } from '../src/shared/roles';
 import { hashPassword, sha256, verifyPassword, ITERATIONS } from './auth';
 import { parseMessages } from '../src/parser';
 import { llmAdapter,type LlmEnv } from './llm';
@@ -343,6 +343,22 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     return json({id},201);
   }
   const edit=path.match(/^\/api\/admin\/notices\/([\w-]+)$/);
+  if(edit&&method==='DELETE'){
+    if(!canDeleteNotice(admin.position))fail(403,'只有班长可以删除通知，其他班委请使用归档');
+    const body=await readBody(request);
+    if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
+    const row=await env.DB.prepare('SELECT version AS version FROM notices WHERE id=?').bind(edit[1]).first<{version:number}>();
+    if(!row)fail(404,'通知不存在');
+    if(row.version!==body.version)fail(409,'通知已被更新，请刷新后重试');
+    // audit_log 没有级联删除，必须连同已读记录一起先清掉，通知才删得掉。
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM notice_reads WHERE notice_id=?').bind(edit[1]),
+      env.DB.prepare('DELETE FROM audit_log WHERE notice_id=?').bind(edit[1]),
+      env.DB.prepare('DELETE FROM notices WHERE id=? AND version=?').bind(edit[1],body.version as number),
+      bumpFeed(env.DB)
+    ]);
+    return json({ok:true});
+  }
   if(edit&&method==='PUT'){
     const body=await readBody(request),n=validate(body),now=new Date().toISOString();
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');

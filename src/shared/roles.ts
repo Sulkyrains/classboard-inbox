@@ -3,3 +3,5 @@ export const LEAD_POSITIONS=['班长','团支书'] as const;
 export const isLeadPosition=(position?:string|null)=>!!position&&(LEAD_POSITIONS as readonly string[]).includes(position);
 /** 主要班委不受限；其他委员动不了主要班委发布的内容。 */
 export const canManageNotice=(actor?:string|null,author?:string|null)=>isLeadPosition(actor)||!isLeadPosition(author);
+/** 永久删除只给班长：归档是「不再展示但留档」，删除不可恢复。 */
+export const canDeleteNotice=(position?:string|null)=>position==='班长';
