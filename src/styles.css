@@ -152,6 +152,27 @@
 :root[data-theme=dark] .notify-banner>svg{color:#c9963f}
 @media (max-width:720px){.notify-banner{flex-wrap:wrap}.notify-banner>div{flex-basis:100%;order:1}.notify-banner>svg{order:0}.notify-banner .button{order:2}.notify-banner .icon-button{order:3;margin-left:auto}}
 .notify-actions .install-button{margin:0}
+/* 操作日志（仅班长可见）：一行动作、一行通知与操作人，窄屏把时间换到下一行 */
+.log-hint{margin:-6px 0 16px;font-size:12px;color:#8c9eb8;line-height:1.7}
+.op-log{display:flex;flex-direction:column;gap:9px}
+.op-row{display:flex;align-items:center;gap:12px;padding:12px 15px;border:1px solid var(--line);border-radius:12px;background:white}
+.op-badge{font-size:11px;padding:3px 9px;border-radius:6px;white-space:nowrap;background:#eaf0f8;color:#6b7c99}
+.op-badge.ok{background:#e6f4ec;color:#2f7d55}
+.op-badge.warn{background:#fdf2de;color:#b3761c}
+.op-badge.danger{background:#fbe9e9;color:#c53c3c}
+.op-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.op-main strong{font-size:13.5px;font-weight:600;color:#31425f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-main span{font-size:12px;color:#8c9eb8}
+.op-row time{font-size:12px;color:#9aa8bf;white-space:nowrap}
+@media(max-width:640px){.op-row{flex-wrap:wrap;gap:8px}.op-row time{width:100%}.op-main strong{white-space:normal}}
+:root[data-theme=dark] .op-row{background:#111d36;border-color:#22304e}
+:root[data-theme=dark] .log-hint,:root[data-theme=dark] .op-main span{color:#8395b3}
+:root[data-theme=dark] .op-main strong{color:#b9c9e4}
+:root[data-theme=dark] .op-row time{color:#7b8aa4}
+:root[data-theme=dark] .op-badge{background:#1b2745;color:#93a5c4}
+:root[data-theme=dark] .op-badge.ok{background:#16352c;color:#71c8a8}
+:root[data-theme=dark] .op-badge.warn{background:#3a2d17;color:#d9ab5e}
+:root[data-theme=dark] .op-badge.danger{background:#3a1f22;color:#ff9b9b}
 :root[data-theme=dark] .notify-check-head strong{color:#b9c9e4}
 :root[data-theme=dark] .notify-version{color:#8395b3}
 :root[data-theme=dark] .notify-rows em{color:#a9bad6}

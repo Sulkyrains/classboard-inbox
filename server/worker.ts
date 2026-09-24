@@ -1,5 +1,6 @@
 import { categories, type Admin, type NoticeInput } from '../src/shared/types';
 import { canDeleteNotice, canManageNotice } from '../src/shared/roles';
+import { changedLabels } from '../src/shared/ops';
 import { hashPassword, sha256, verifyPassword, ITERATIONS } from './auth';
 import { parseMessages } from '../src/parser';
 import { llmAdapter,type LlmEnv } from './llm';
@@ -110,6 +111,12 @@ function mapNotice(row: Record<string,unknown>, privateFields=false) {
 }
 /** 权限判断按作者「当前」职位：以后调整职位，历史通知的管理权同步变化。 */
 const authorPosition=(db: D1Database, id: string)=>db.prepare('SELECT u.position AS position FROM notices n LEFT JOIN users u ON u.id=n.author_id WHERE n.id=?').bind(id).first<{position:string|null}>();
+/**
+ * 记一条操作日志（只有班长能查）。用 SELECT … FROM notices 写入，条件与同一批里的 UPDATE/DELETE 一致：
+ * 这次改动没落库就不会多出一条日志。notice_title 是当时的标题快照，通知被永久删除后日志仍然可读。
+ */
+const logOp=(env:Env,admin:Admin,action:string,detail:string,now:string,where:string,args:unknown[])=>
+  env.DB.prepare(`INSERT INTO operation_log(id,notice_id,notice_title,actor_id,actor_name,actor_position,action,detail,created_at) SELECT ?,id,title,?,?,?,?,?,? FROM notices WHERE ${where}`).bind(crypto.randomUUID(),admin.id,admin.display_name,admin.position||'',action,detail,now,...args);
 function pushPayload(notice:{id:string;title:string;category:string;body:string}): PushPayload {
   return { title:`【${notice.category}】${notice.title}`,body:notice.body.replace(/\s+/g,' ').slice(0,140),url:'/',tag:notice.id };
 }
@@ -320,7 +327,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
       const warnings=Array.isArray(raw.warnings)?raw.warnings.slice(0,20).map((x:unknown)=>field(x,'提示',300)):[];
       const hash=await sha256(n.body.replace(/\s+/g,'').normalize('NFKC'));
       statements.push(env.DB.prepare("INSERT OR IGNORE INTO notices(id,title,body,category,location,audience,event_at,deadline_at,pinned,status,source,source_text,source_hash,warnings,author_id,author_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,?,?,?)").bind(id,n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,body.source,sourceText,hash,JSON.stringify(warnings),admin.id,admin.display_name,now,now));
-      statements.push(env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=?').bind(crypto.randomUUID(),admin.display_name,'导入待审核',now,id));
+      statements.push(logOp(env,admin,'导入待审核','',now,'id=?',[id]));
     }
     statements.push(bumpFeed(env.DB));
     const results=await env.DB.batch(statements);const imported=results.slice(0,-1).filter((_,i)=>i%2===0).reduce((sum,r)=>sum+(r.meta.changes||0),0);
@@ -332,11 +339,18 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     const result=await env.DB.prepare('SELECT n.*,u.position AS author_position FROM notices n LEFT JOIN users u ON u.id=n.author_id ORDER BY n.created_at DESC LIMIT 500').all();
     return json({notices:result.results.map(r=>mapNotice(r,true))},200,feedHeaders(etag));
   }
+  // 操作日志只有班长能看：职位在服务端判断，前端藏入口只是顺带。
+  if(path==='/api/admin/operations'&&method==='GET'){
+    if(admin.position!=='班长')fail(403,'只有班长可以查看操作日志');
+    const limit=Math.min(200,Math.max(1,Number(url.searchParams.get('limit'))||100));
+    const result=await env.DB.prepare('SELECT id,notice_id,notice_title,actor_name,actor_position,action,detail,created_at FROM operation_log ORDER BY created_at DESC,rowid DESC LIMIT ?').bind(limit).all();
+    return json({operations:result.results});
+  }
   if(path==='/api/admin/notices'&&method==='POST'){
     const body=await readBody(request),n=validate(body),id=crypto.randomUUID(),now=new Date().toISOString();
     await env.DB.batch([
       env.DB.prepare("INSERT INTO notices(id,title,body,category,location,audience,event_at,deadline_at,pinned,status,author_id,author_name,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,'published',?,?,?,?,?)").bind(id,n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,admin.id,admin.display_name,now,now,now),
-      env.DB.prepare('INSERT INTO audit_log VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),id,admin.display_name,'发布',now),
+      logOp(env,admin,'发布','',now,'id=?',[id]),
       bumpFeed(env.DB)
     ]);
     deferPush(ctx,env,{id,title:n.title,category:n.category,body:n.body});
@@ -345,14 +359,17 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
   const edit=path.match(/^\/api\/admin\/notices\/([\w-]+)$/);
   if(edit&&method==='DELETE'){
     if(!canDeleteNotice(admin.position))fail(403,'只有班长可以删除通知，其他班委请使用归档');
-    const body=await readBody(request);
+    const body=await readBody(request),now=new Date().toISOString();
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
     const row=await env.DB.prepare('SELECT version AS version FROM notices WHERE id=?').bind(edit[1]).first<{version:number}>();
     if(!row)fail(404,'通知不存在');
     if(row.version!==body.version)fail(409,'通知已被更新，请刷新后重试');
-    // audit_log 没有级联删除，必须连同已读记录一起先清掉，通知才删得掉。
+    const reads=await env.DB.prepare('SELECT COUNT(*) AS n FROM notice_reads WHERE notice_id=?').bind(edit[1]).first<{n:number}>();
     await env.DB.batch([
+      // 先写日志（此时通知还在，SELECT 才取得到标题快照），再动手删。
+      logOp(env,admin,'删除',reads?.n?`含 ${reads.n} 条已读记录一并清除`:'',now,'id=? AND version=?',[edit[1],body.version as number]),
       env.DB.prepare('DELETE FROM notice_reads WHERE notice_id=?').bind(edit[1]),
+      // audit_log 是老表（外键指向 notices、没有级联删除），历史行不清掉通知就删不掉；留痕由 operation_log 负责。
       env.DB.prepare('DELETE FROM audit_log WHERE notice_id=?').bind(edit[1]),
       env.DB.prepare('DELETE FROM notices WHERE id=? AND version=?').bind(edit[1],body.version as number),
       bumpFeed(env.DB)
@@ -364,9 +381,11 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(!Number.isInteger(body.version))fail(400,'缺少通知版本');
     const author=await authorPosition(env.DB,edit[1]);
     if(author&&!canManageNotice(admin.position,author.position))fail(403,'这条通知由班长或团支书发布，仅班长或团支书可以编辑');
+    const before=await env.DB.prepare("SELECT title,body,category,location,audience,event_at,deadline_at,pinned FROM notices WHERE id=? AND version=? AND status IN ('pending','published')").bind(edit[1],body.version as number).first<Record<string,unknown>>();
+    const changed=before?changedLabels(before,n as unknown as Record<string,unknown>):[];
     const result=await env.DB.batch([
       env.DB.prepare("UPDATE notices SET title=?,body=?,category=?,location=?,audience=?,event_at=?,deadline_at=?,pinned=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND status IN ('pending','published')").bind(n.title,n.body,n.category,n.location,n.audience,n.event_at,n.deadline_at,+n.pinned,now,edit[1],body.version as number),
-      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,'编辑',now,edit[1],Number(body.version)+1,now),
+      logOp(env,admin,'编辑',changed.length?`修改了${changed.join('、')}`:'内容未变化',now,'id=? AND version=? AND updated_at=?',[edit[1],Number(body.version)+1,now]),
       bumpFeed(env.DB)
     ]);
     if(!result[0].meta.changes)fail(409,'通知已被更新或已归档，请刷新后重试');
@@ -385,7 +404,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
       const back=row.status==='archived'?'published':'pending';
       const results=await env.DB.batch([
         env.DB.prepare('UPDATE notices SET status=?,published_at=CASE WHEN ?=\'published\' THEN ? ELSE published_at END,updated_at=?,version=version+1 WHERE id=? AND version=? AND status=?').bind(back,back,now,now,action[1],body.version as number,row.status),
-        env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,row.status==='archived'?'撤销归档':'撤销驳回',now,action[1],Number(body.version)+1,now),
+        logOp(env,admin,row.status==='archived'?'撤销归档':'撤销驳回','',now,'id=? AND version=? AND updated_at=?',[action[1],Number(body.version)+1,now]),
         bumpFeed(env.DB)
       ]);
       if(!results[0].meta.changes)fail(409,'通知状态已变化，请刷新后重试');
@@ -401,7 +420,7 @@ async function route(request: Request, env: Env, ctx?: ExecutionContext): Promis
     if(action[2]==='archive'){const author=await authorPosition(env.DB,action[1]);if(author&&!canManageNotice(admin.position,author.position))fail(403,'这条通知由班长或团支书发布，仅班长或团支书可以归档');}
     const results=await env.DB.batch([
       env.DB.prepare('UPDATE notices SET status=?,reviewed_by=?,reviewed_at=?,published_at=CASE WHEN ?=\'published\' THEN ? ELSE published_at END,updated_at=?,version=version+1 WHERE id=? AND version=? AND status=?').bind(status,admin.id,now,status,now,now,action[1],body.version as number,old),
-      env.DB.prepare('INSERT INTO audit_log SELECT ?,id,?,?,? FROM notices WHERE id=? AND version=? AND updated_at=?').bind(crypto.randomUUID(),admin.display_name,label,now,action[1],Number(body.version)+1,now),
+      logOp(env,admin,label,'',now,'id=? AND version=? AND updated_at=?',[action[1],Number(body.version)+1,now]),
       bumpFeed(env.DB)
     ]);
     if(!results[0].meta.changes)fail(409,'通知状态已变化，请刷新后重试');

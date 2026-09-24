@@ -210,8 +210,8 @@ try{
   const restoredPeer=await readNotice(peerId);
   assert.equal(restoredPeer.status,'pending');
   assert.ok(!(await(await call('/notices')).json()).notices.some(n=>n.id===peerId));   // 回到待审核，不对外可见
-  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销归档'").bind(leadId).first()).n,1);
-  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE notice_id=? AND action='撤销驳回'").bind(peerId).first()).n,1);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM operation_log WHERE notice_id=? AND action='撤销归档'").bind(leadId).first()).n,1);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM operation_log WHERE notice_id=? AND action='撤销驳回'").bind(peerId).first()).n,1);
   // ---- 永久删除：只有班长能删；删掉后通知、已读记录与审计记录一起消失，列表缓存立即失效 ----
   const secretaryCookie=await committeeLogin('integration-secretary','测试团支书','团支书');
   cookie=leadCookie;
@@ -236,5 +236,36 @@ try{
   const afterDelete=await revalidate('/notices');assert.notEqual(afterDelete.tag,beforeDelete.tag);
   assert.ok(!(await(await call('/notices')).json()).notices.some(n=>n.id===doomedId));
   assert.ok(!(await(await call('/admin/notices')).json()).notices.some(n=>n.id===doomedId));
-  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级、班长永久删除与已读/审计级联清理。');
+  // ---- 操作日志：只有班长能看；发布/编辑/归档/撤销/删除逐条留痕，通知被删也留快照 ----
+  cookie=memberCookie;
+  assert.equal((await call('/admin/operations')).status,403);            // 委员没有权限
+  cookie=secretaryCookie;
+  assert.equal((await call('/admin/operations')).status,403);            // 团支书也没有
+  // 同学也没有（前面的同学会话早被改密踢掉，这里新开一个同学账号）
+  const studentSalt=randomBytes(16).toString('hex');
+  await db.prepare("INSERT INTO users(id,student_id,display_name,role,salt,digest,created_at,must_change_password) VALUES(?,?,?,'student',?,?,?,0)").bind(randomUUID(),'integration-student2','测试同学二号',studentSalt,pbkdf2Sync(secret,studentSalt,100000,32,'sha256').toString('hex'),new Date().toISOString()).run();
+  const student2=await call('/login','POST',{student_id:'integration-student2',name:'测试同学二号',password:secret});
+  assert.equal(student2.status,200);
+  cookie=student2.headers.get('Set-Cookie').split(';')[0];
+  assert.equal((await call('/admin/operations')).status,403);
+  cookie=leadCookie;
+  const ops=(await(await call('/admin/operations')).json()).operations;
+  assert.ok(ops.length>=8,`应记录多条操作，实际 ${ops.length} 条`);
+  assert.deepEqual(ops[0].notice_id,doomedId);assert.equal(ops[0].action,'删除');    // 最新一条排最前
+  assert.equal(ops[0].notice_title,'准备删除的测试通知');                            // 通知没了，标题快照还在
+  assert.equal(ops[0].actor_name,'测试班长');assert.equal(ops[0].actor_position,'班长');
+  assert.equal(ops[0].detail,'含 1 条已读记录一并清除');
+  const editLog=ops.find(o=>o.notice_id===freshId&&o.action==='编辑');
+  // 这条编辑由最早的「测试班委」完成：他没有职位，日志里职位就是空串（前端只显示姓名）
+  assert.ok(editLog,'应有 freshId 的编辑日志');assert.equal(editLog.detail,'修改了标题');assert.equal(editLog.actor_name,'测试班委');assert.equal(editLog.actor_position,'');
+  const pinLog=ops.find(o=>o.notice_id===memberId&&o.action==='编辑');
+  // 委员那次「置顶」顺带把标题改回 fresh.title，所以两个字段都算改动，顺序按字段表
+  assert.ok(pinLog,'应有 memberId 的置顶日志');assert.equal(pinLog.detail,'修改了标题、置顶');assert.equal(pinLog.actor_name,'测试学习委员');
+  assert.ok(ops.some(o=>o.notice_id===leadId&&o.action==='发布'));
+  assert.ok(ops.some(o=>o.notice_id===peerId&&o.action==='撤销驳回'));
+  // 只有「发布」与「删除」两条：被 403/409/400 挡下的尝试不该留下日志
+  assert.deepEqual(ops.filter(o=>o.notice_id===doomedId).map(o=>o.action),['删除','发布']);
+  // 老表 audit_log 不再写入（历史行由 0009 迁移回填到 operation_log）
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM audit_log').first()).n,0);
+  console.log('PASS: 姓名学号登录、首次改密、弱口令拦截、旧密码失效、全部会话撤销、限流、同学权限、个人已读隔离与跨设备同步、发布筛选置顶、并发编辑、待审隔离、解析导入审核归档、撤销归档与撤销驳回、推送订阅域名白名单与设备上限、日程订阅链接重置、通知列表 ETag 校验与发布后失效、班委职位与归档/编辑权限分级、班长永久删除与已读级联清理、班长专用操作日志（含删除留痕与越权 403）。');
 }finally{await mf.dispose();}
